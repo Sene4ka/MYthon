@@ -28,12 +28,33 @@ typedef enum {
     TOKEN_LESS,
     TOKEN_LESS_EQUAL,
     TOKEN_COLON,
+    TOKEN_QUESTION,
+
+    TOKEN_BIT_AND,
+    TOKEN_BIT_OR,
+    TOKEN_BIT_XOR,
+    TOKEN_BIT_NOT,
+    TOKEN_BIT_LEFT_SHIFT,
+    TOKEN_BIT_RIGHT_SHIFT,
+
+    TOKEN_BIT_AND_EQUAL,
+    TOKEN_BIT_OR_EQUAL,
+    TOKEN_BIT_XOR_EQUAL,
+    TOKEN_BIT_LEFT_SHIFT_EQUAL,
+    TOKEN_BIT_RIGHT_SHIFT_EQUAL,
+
+    TOKEN_PLUS_EQUAL,
+    TOKEN_MINUS_EQUAL,
+    TOKEN_STAR_EQUAL,
+    TOKEN_SLASH_EQUAL,
+    TOKEN_PERCENT_EQUAL,
 
     TOKEN_IDENTIFIER,
     TOKEN_STRING,
     TOKEN_NUMBER,
 
     TOKEN_AND,
+    TOKEN_CLASS,
     TOKEN_ELSE,
     TOKEN_FALSE,
     TOKEN_FOR,
@@ -42,7 +63,10 @@ typedef enum {
     TOKEN_NIL,
     TOKEN_OR,
     TOKEN_RETURN,
+    TOKEN_SUPER,
+    TOKEN_THIS,
     TOKEN_TRUE,
+    TOKEN_VAR,
     TOKEN_WHILE,
 
     TOKEN_EOF,
@@ -51,22 +75,22 @@ typedef enum {
 
 typedef struct {
     TokenType type;
-    const char* start;
+    const unsigned char* start;
     size_t length;
     int line;
     int column;
 } Token;
 
 typedef struct {
-    const char* source;
-    const char* start;
-    const char* current;
+    const unsigned char* source;
+    const unsigned char* start;
+    const unsigned char* current;
     int line;
     int column;
     int error_count;
 } Lexer;
 
-void lexer_init(Lexer* lexer, const char* source);
+void lexer_init(Lexer* lexer, const unsigned char* source);
 Token lexer_next_token(Lexer* lexer);
 int lexer_has_errors(const Lexer* lexer);
 const char* token_type_to_string(TokenType type);
