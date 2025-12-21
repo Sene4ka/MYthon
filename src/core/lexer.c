@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 typedef struct {
     const char* keyword;
@@ -10,39 +11,40 @@ typedef struct {
 } KeywordEntry;
 
 static const KeywordEntry keywords[] = {
-        {"and", TOKEN_AND},
-        {"class", TOKEN_CLASS},
-        {"else", TOKEN_ELSE},
-        {"false", TOKEN_FALSE},
-        {"for", TOKEN_FOR},
-        {"fn", TOKEN_FN},
-        {"if", TOKEN_IF},
-        {"nil", TOKEN_NIL},
-        {"or", TOKEN_OR},
-        {"return", TOKEN_RETURN},
-        {"super", TOKEN_SUPER},
-        {"this", TOKEN_THIS},
-        {"true", TOKEN_TRUE},
-        {"var", TOKEN_VAR},
-        {"while", TOKEN_WHILE},
-        {NULL, TOKEN_EOF}
+    {"and", TOKEN_AND},
+    {"class", TOKEN_CLASS},
+    {"else", TOKEN_ELSE},
+    {"false", TOKEN_FALSE},
+    {"for", TOKEN_FOR},
+    {"fn", TOKEN_FN},
+    {"if", TOKEN_IF},
+    {"nil", TOKEN_NIL},
+    {"or", TOKEN_OR},
+    {"return", TOKEN_RETURN},
+    {"super", TOKEN_SUPER},
+    {"this", TOKEN_THIS},
+    {"true", TOKEN_TRUE},
+    {"var", TOKEN_VAR},
+    {"while", TOKEN_WHILE},
+    {NULL, TOKEN_EOF}
 };
 
-static int is_at_end(Lexer* lexer) {
+static int is_at_end(const Lexer* lexer) {
     return *lexer->current == '\0';
 }
 
 static char advance(Lexer* lexer) {
+    char c = *lexer->current;
     lexer->current++;
     lexer->column++;
-    return lexer->current[-1];
+    return c;
 }
 
-static char peek(Lexer* lexer) {
+static char peek(const Lexer* lexer) {
     return *lexer->current;
 }
 
-static char peek_next(Lexer* lexer) {
+static char peek_next(const Lexer* lexer) {
     if (is_at_end(lexer)) return '\0';
     return lexer->current[1];
 }
@@ -54,7 +56,7 @@ static int match(Lexer* lexer, char expected) {
     return 1;
 }
 
-static Token make_token(Lexer* lexer, TokenType type) {
+static Token make_token(const Lexer* lexer, TokenType type) {
     Token token;
     token.type = type;
     token.start = lexer->start;
@@ -68,7 +70,7 @@ static Token error_token(Lexer* lexer, const char* message) {
     lexer->error_count++;
     Token token;
     token.type = TOKEN_ERROR;
-    token.start = (unsigned char*)message;
+    token.start = (const unsigned char*)message;
     token.length = strlen(message);
     token.line = lexer->line;
     token.column = lexer->column;
@@ -76,7 +78,7 @@ static Token error_token(Lexer* lexer, const char* message) {
 }
 
 static void skip_whitespace(Lexer* lexer) {
-    for (;;) {
+    while (1) {
         char c = peek(lexer);
         switch (c) {
             case ' ':
@@ -123,9 +125,6 @@ void lexer_skip_comments(Lexer* lexer) {
                     advance(lexer);
                 }
             }
-            if (nesting > 0) {
-                error_token(lexer, "Unterminated block comment");
-            }
         }
         else {
             lexer->current--;
@@ -138,8 +137,17 @@ static void handle_escape_sequence(Lexer* lexer) {
     if (is_at_end(lexer)) return;
     char c = peek(lexer);
     switch (c) {
-        case 'n': case 't': case 'r': case '\\': case '"': case '\'':
-        case '0': case 'a': case 'b': case 'f': case 'v':
+        case 'n':
+        case 't':
+        case 'r':
+        case '\\':
+        case '"':
+        case '\'':
+        case '0':
+        case 'a':
+        case 'b':
+        case 'f':
+        case 'v':
             advance(lexer);
             break;
         case 'x':
@@ -149,22 +157,19 @@ static void handle_escape_sequence(Lexer* lexer) {
                 if (isxdigit(peek(lexer))) {
                     advance(lexer);
                 }
-            } else {
-                error_token(lexer, "Invalid hex escape sequence");
             }
             break;
         case 'u':
             advance(lexer);
             for (int i = 0; i < 4; i++) {
                 if (!isxdigit(peek(lexer))) {
-                    error_token(lexer, "Invalid Unicode escape sequence");
                     break;
                 }
                 advance(lexer);
             }
             break;
         default:
-            error_token(lexer, "Invalid escape sequence");
+            break;
     }
 }
 
@@ -177,7 +182,8 @@ static Token string(Lexer* lexer, char quote_type) {
         if (peek(lexer) == '\\') {
             advance(lexer);
             handle_escape_sequence(lexer);
-        } else {
+        }
+        else {
             advance(lexer);
         }
     }
@@ -185,10 +191,7 @@ static Token string(Lexer* lexer, char quote_type) {
         return error_token(lexer, "Unterminated string");
     }
     advance(lexer);
-    Token token = make_token(lexer, TOKEN_STRING);
-    token.start++;
-    token.length -= 2;
-    return token;
+    return make_token(lexer, TOKEN_STRING);
 }
 
 static Token number(Lexer* lexer) {
@@ -230,7 +233,7 @@ static Token identifier(Lexer* lexer) {
     while (is_alphanumeric(peek(lexer))) {
         advance(lexer);
     }
-    size_t length = lexer->current - lexer->start;
+    size_t length = (size_t)(lexer->current - lexer->start);
     for (const KeywordEntry* entry = keywords; entry->keyword != NULL; entry++) {
         if (strlen(entry->keyword) == length &&
             memcmp(lexer->start, entry->keyword, length) == 0) {
@@ -244,11 +247,23 @@ static Token scan_token(Lexer* lexer) {
     skip_whitespace(lexer);
     lexer_skip_comments(lexer);
     skip_whitespace(lexer);
+
     lexer->start = lexer->current;
+
     if (is_at_end(lexer)) {
         return make_token(lexer, TOKEN_EOF);
     }
+
     char c = advance(lexer);
+
+    if (isdigit(c)) {
+        return number(lexer);
+    }
+
+    if (is_alpha(c)) {
+        return identifier(lexer);
+    }
+
     switch (c) {
         case '(': return make_token(lexer, TOKEN_LEFT_PAREN);
         case ')': return make_token(lexer, TOKEN_RIGHT_PAREN);
@@ -266,8 +281,6 @@ static Token scan_token(Lexer* lexer) {
         case '~': return make_token(lexer, TOKEN_BIT_NOT);
         case '?': return make_token(lexer, TOKEN_QUESTION);
         case ':': return make_token(lexer, TOKEN_COLON);
-    }
-    switch (c) {
         case '-':
             if (match(lexer, '-')) return make_token(lexer, TOKEN_MINUS_MINUS);
             if (match(lexer, '=')) return make_token(lexer, TOKEN_MINUS_EQUAL);
@@ -277,11 +290,11 @@ static Token scan_token(Lexer* lexer) {
             if (match(lexer, '=')) return make_token(lexer, TOKEN_PLUS_EQUAL);
             return make_token(lexer, TOKEN_PLUS);
         case '!':
-            return make_token(lexer, match(lexer, '=') ?
-                                     TOKEN_BANG_EQUAL : TOKEN_BANG);
+            if (match(lexer, '=')) return make_token(lexer, TOKEN_BANG_EQUAL);
+            return make_token(lexer, TOKEN_BANG);
         case '=':
-            return make_token(lexer, match(lexer, '=') ?
-                                     TOKEN_EQUAL_EQUAL : TOKEN_EQUAL);
+            if (match(lexer, '=')) return make_token(lexer, TOKEN_EQUAL_EQUAL);
+            return make_token(lexer, TOKEN_EQUAL);
         case '<':
             if (match(lexer, '<')) {
                 if (match(lexer, '=')) return make_token(lexer, TOKEN_BIT_LEFT_SHIFT_EQUAL);
@@ -310,17 +323,12 @@ static Token scan_token(Lexer* lexer) {
         case '^':
             if (match(lexer, '=')) return make_token(lexer, TOKEN_BIT_XOR_EQUAL);
             return make_token(lexer, TOKEN_BIT_XOR);
+        case '"':
+        case '\'':
+            return string(lexer, c);
+        default:
+            return error_token(lexer, "Unexpected character");
     }
-    if (c == '"' || c == '\'') {
-        return string(lexer, c);
-    }
-    if (isdigit(c)) {
-        return number(lexer);
-    }
-    if (is_alpha(c)) {
-        return identifier(lexer);
-    }
-    return error_token(lexer, "Unexpected character");
 }
 
 void lexer_init(Lexer* lexer, const unsigned char* source) {
@@ -402,8 +410,8 @@ const char* token_type_to_string(TokenType type) {
         case TOKEN_WHILE: return "WHILE";
         case TOKEN_EOF: return "EOF";
         case TOKEN_ERROR: return "ERROR";
+        default: return "UNKNOWN";
     }
-    return "UNKNOWN";
 }
 
 char* token_copy_text(const Token* token) {
@@ -412,9 +420,7 @@ char* token_copy_text(const Token* token) {
         result[0] = '\0';
         return result;
     }
-    if (token->type == TOKEN_ERROR) {
-        return copy_string((const char*)token->start);
-    }
+
     char* result = ALLOCATE(char, token->length + 1);
     memcpy(result, token->start, token->length);
     result[token->length] = '\0';
