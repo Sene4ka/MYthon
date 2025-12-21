@@ -24,8 +24,10 @@ static const KeywordEntry keywords[] = {
     {"super", TOKEN_SUPER},
     {"this", TOKEN_THIS},
     {"true", TOKEN_TRUE},
+    {"let", TOKEN_LET},
     {"var", TOKEN_VAR},
     {"while", TOKEN_WHILE},
+    {"break", TOKEN_BREAK},
     {NULL, TOKEN_EOF}
 };
 
@@ -269,6 +271,8 @@ static Token scan_token(Lexer* lexer) {
         case ')': return make_token(lexer, TOKEN_RIGHT_PAREN);
         case '{': return make_token(lexer, TOKEN_LEFT_BRACE);
         case '}': return make_token(lexer, TOKEN_RIGHT_BRACE);
+        case '[': return make_token(lexer, TOKEN_LEFT_BRACKET);
+        case ']': return make_token(lexer, TOKEN_RIGHT_BRACKET);
         case ',': return make_token(lexer, TOKEN_COMMA);
         case '.': return make_token(lexer, TOKEN_DOT);
         case ';': return make_token(lexer, TOKEN_SEMICOLON);
@@ -354,6 +358,8 @@ const char* token_type_to_string(TokenType type) {
         case TOKEN_RIGHT_PAREN: return "RIGHT_PAREN";
         case TOKEN_LEFT_BRACE: return "LEFT_BRACE";
         case TOKEN_RIGHT_BRACE: return "RIGHT_BRACE";
+        case TOKEN_LEFT_BRACKET: return "LEFT_BRACKET";
+        case TOKEN_RIGHT_BRACKET: return "RIGHT_BRACKET";
         case TOKEN_COMMA: return "COMMA";
         case TOKEN_DOT: return "DOT";
         case TOKEN_MINUS: return "MINUS";
@@ -408,6 +414,7 @@ const char* token_type_to_string(TokenType type) {
         case TOKEN_TRUE: return "TRUE";
         case TOKEN_VAR: return "VAR";
         case TOKEN_WHILE: return "WHILE";
+        case TOKEN_BREAK: return "BREAK";
         case TOKEN_EOF: return "EOF";
         case TOKEN_ERROR: return "ERROR";
         default: return "UNKNOWN";

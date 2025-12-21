@@ -69,6 +69,7 @@ CompileResult compile_if(Compiler* compiler, const ASTNode* node, Bytecode* byte
 CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* bytecode);
 CompileResult compile_function(Compiler* compiler, const ASTNode* node, Bytecode* bytecode);
 CompileResult compile_return(Compiler* compiler, const ASTNode* node, Bytecode* bytecode);
+CompileResult compile_break(Compiler* compiler, Bytecode* bytecode);
 
 int compiler_resolve_local(Compiler* compiler, const char* name, int length);
 int compiler_add_local(Compiler* compiler, const char* name, int length);
