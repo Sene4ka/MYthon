@@ -3,7 +3,6 @@
 
 #include "bytecode.h"
 #include <stdint.h>
-#include <stddef.h>
 
 typedef enum {
     VAL_NIL,
@@ -98,7 +97,7 @@ typedef struct {
 #define INT_VAL(i)           ((Value){VAL_INT, {.integer = (i)}})
 #define FLOAT_VAL(f)         ((Value){VAL_FLOAT, {.floating = (f)}})
 #define NIL_VAL              ((Value){VAL_NIL, {.integer = 0}})
-#define OBJECT_VAL(obj)      ((Value){obj->type, {.object = (Object*)(obj)}})
+#define OBJECT_VAL(obj) ((Value){((Object*)(obj))->type, {.object = (Object*)(obj)}})
 
 typedef struct {
     Value* values;
