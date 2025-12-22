@@ -176,4 +176,6 @@ void vm_print_value(Value value);
 
 const char* vm_value_type_name(Value value);
 
+NativeFunctionObject* vm_new_native_function(VM* vm, const char* name, NativeFn function, int arity);
+
 #endif

@@ -821,5 +821,3 @@ static void consume_semicolon(Parser* parser) {
 
     parser_error_at_current(parser, "Ожидается ';' или новая строка");
 }
-
-

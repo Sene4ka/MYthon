@@ -1,5 +1,6 @@
 #include "compiler.h"
 #include "memory.h"
+#include "native.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -111,6 +112,8 @@ CompileResult compile_node(Compiler* compiler, const ASTNode* node, Bytecode* by
             return compile_continue(compiler, bytecode);
         case NODE_GROUP_EXPR:
             return compile_expression(compiler, node->unary.operand, bytecode);
+        case NODE_TERNARY_EXPR:
+            return compile_ternary(compiler, node, bytecode);
 
         case NODE_BINARY_EXPR:
             return compile_binary(compiler, node, bytecode);
@@ -357,16 +360,97 @@ CompileResult compile_assign(Compiler* compiler, const ASTNode* node, Bytecode* 
 CompileResult compile_call(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     if (node->call.callee->type == NODE_VARIABLE_EXPR) {
         const char* name = node->call.callee->variable.name;
-        if (strcmp(name, "print") == 0) {
-            if (node->call.arg_count != 1) {
-                compiler_error_at_line(compiler, node->line, "print takes exactly 1 argument");
+
+        NativeInfo* native_info = native_get_info(name);
+        if (native_info != NULL) {
+            if (native_info->arity != -1 && (int)node->call.arg_count != native_info->arity) {
+                char buffer[256];
+                snprintf(buffer, sizeof(buffer), "%s() expects %d arguments, got %zu",
+                         name, native_info->arity, node->call.arg_count);
+                compiler_error_at_line(compiler, node->line, buffer);
                 return COMPILE_ERROR;
             }
 
-            CompileResult result = compile_expression(compiler, node->call.arguments[0], bytecode);
+            if (strcmp(name, "print") == 0) {
+                if (node->call.arg_count < 1) {
+                    compiler_error_at_line(compiler, node->line,
+                                           "print() expects at least 1 argument");
+                    return COMPILE_ERROR;
+                }
+
+                for (size_t i = 0; i < node->call.arg_count; i++) {
+                    CompileResult result = compile_expression(compiler,
+                                                              node->call.arguments[i],
+                                                              bytecode);
+                    if (result != COMPILE_SUCCESS) return result;
+
+                    emit_op(compiler, bytecode, OP_PRINT);
+                }
+                return COMPILE_SUCCESS;
+            }
+
+            for (size_t i = 0; i < node->call.arg_count; i++) {
+                CompileResult result = compile_expression(compiler,
+                                                          node->call.arguments[i],
+                                                          bytecode);
+                if (result != COMPILE_SUCCESS) return result;
+            }
+
+            int global_index = native_get_global_index(name);
+            if (global_index < 0) {
+                char buffer[256];
+                snprintf(buffer, sizeof(buffer), "Native function '%s' not registered", name);
+                compiler_error_at_line(compiler, node->line, buffer);
+                return COMPILE_ERROR;
+            }
+
+            emit_op(compiler, bytecode, OP_LOAD_GLOBAL);
+            emit_u16(compiler, bytecode, (uint16_t)global_index);
+
+            if (node->call.arg_count <= 255) {
+                emit_op(compiler, bytecode, OP_CALL_8);
+                emit_u8(compiler, bytecode, (uint8_t)node->call.arg_count);
+            } else {
+                emit_op(compiler, bytecode, OP_CALL_16);
+                emit_u16(compiler, bytecode, (uint16_t)node->call.arg_count);
+            }
+
+            return COMPILE_SUCCESS;
+        }
+    }
+
+    if (node->call.callee->type == NODE_MEMBER_EXPR) {
+        const char* method_name = node->call.callee->member.name;
+
+        if (strcmp(method_name, "push") == 0) {
+            CompileResult result = compile_expression(compiler,
+                                                      node->call.callee->member.object,
+                                                      bytecode);
             if (result != COMPILE_SUCCESS) return result;
 
-            emit_op(compiler, bytecode, OP_PRINT);
+            for (size_t i = 0; i < node->call.arg_count; i++) {
+                result = compile_expression(compiler, node->call.arguments[i], bytecode);
+                if (result != COMPILE_SUCCESS) return result;
+            }
+
+            int global_index = native_get_global_index("push");
+            if (global_index < 0) {
+                compiler_error_at_line(compiler, node->line,
+                                       "push function not found");
+                return COMPILE_ERROR;
+            }
+
+            emit_op(compiler, bytecode, OP_LOAD_GLOBAL);
+            emit_u16(compiler, bytecode, (uint16_t)global_index);
+
+            if (node->call.arg_count + 1 <= 255) {
+                emit_op(compiler, bytecode, OP_CALL_8);
+                emit_u8(compiler, bytecode, (uint8_t)(node->call.arg_count + 1));
+            } else {
+                emit_op(compiler, bytecode, OP_CALL_16);
+                emit_u16(compiler, bytecode, (uint16_t)(node->call.arg_count + 1));
+            }
+
             return COMPILE_SUCCESS;
         }
     }
@@ -472,6 +556,9 @@ CompileResult compile_if(Compiler* compiler, const ASTNode* node, Bytecode* byte
 CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     compiler_begin_loop(compiler);
     int start_count = compiler->locals.count;
+    compiler_begin_scope(compiler);
+    int saved_break_count = compiler->loop.break_count;
+    int saved_continue_count = compiler->loop.continue_count;
 
     if (node->for_stmt.initializer) {
         CompileResult result = compile_statement(compiler, node->for_stmt.initializer, bytecode);
@@ -490,7 +577,18 @@ CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* byt
         emit_jump(compiler, bytecode, OP_JUMP_IF_FALSE_8, &exit_jump);
         //has_exit_jump = 1;
 
+        if (compiler->loop.break_count >= compiler->loop.break_capacity) {
+            compiler->loop.break_capacity *= 2;
+            compiler->loop.break_jumps = GROW_ARRAY(
+                    size_t,
+                    compiler->loop.break_jumps,
+                    compiler->loop.break_count,
+                    compiler->loop.break_capacity
+            );
+        }
+
         compiler->loop.break_jumps[compiler->loop.break_count++] = exit_jump;
+
     }
 
     CompileResult result = compile_statement(compiler, node->for_stmt.body, bytecode);
@@ -509,27 +607,29 @@ CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* byt
     for (int i = 0; i < compiler->loop.continue_count; i++) {
         compiler_patch_continues(compiler, bytecode, continue_start);
     }
-    compiler->loop.continue_count = 0;
+    compiler->loop.continue_count = saved_continue_count;
 
     size_t current_end = bc_get_current_address(bytecode);
     for (int i = 0; i < compiler->loop.break_count; i++) {
         bc_patch_i16(bytecode, compiler->loop.break_jumps[i], (int16_t)(current_end - compiler->loop.break_jumps[i] - 2));
     }
-    compiler->loop.break_count = 0;
+    compiler->loop.break_count = saved_break_count;;
 
+    compiler_end_scope(compiler, bytecode, start_count);
     compiler_end_loop(compiler, bytecode);
 
     // Clean up loop locals
-    while (compiler->locals.count > start_count) {
-        compiler->locals.count--;
-        if (compiler->locals.names[compiler->locals.count]) {
-            FREE_ARRAY(char, compiler->locals.names[compiler->locals.count],
-                       strlen(compiler->locals.names[compiler->locals.count]) + 1);
-        }
-    }
+    // while (compiler->locals.count > start_count) {
+    //     compiler->locals.count--;
+    //     if (compiler->locals.names[compiler->locals.count]) {
+    //         FREE_ARRAY(char, compiler->locals.names[compiler->locals.count],
+    //                    strlen(compiler->locals.names[compiler->locals.count]) + 1);
+    //     }
+    // }
 
     return COMPILE_SUCCESS;
 }
+
 
 CompileResult compile_function(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     compiler_begin_function(compiler, node->function_stmt.name);
@@ -661,6 +761,8 @@ void compiler_end_scope(Compiler* compiler, Bytecode* bytecode, int start_count)
     while (compiler->locals.count > start_count) {
         emit_op(compiler, bytecode, OP_POP);
         compiler->locals.count--;
+
+        compiler->locals.depths[compiler->locals.count] = -1;
     }
 }
 
@@ -844,4 +946,27 @@ OpCode get_postfix_opcode(TokenType type) {
 
 int should_emit_short(int value) {
     return value >= -128 && value <= 127;
+}
+
+CompileResult compile_ternary(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
+    CompileResult result = compile_expression(compiler, node->ternary.condition, bytecode);
+    if (result != COMPILE_SUCCESS) return result;
+
+    size_t false_jump;
+    emit_jump(compiler, bytecode, OP_JUMP_IF_FALSE_8, &false_jump);
+
+    result = compile_expression(compiler, node->ternary.then_expr, bytecode);
+    if (result != COMPILE_SUCCESS) return result;
+
+    size_t end_jump;
+    emit_jump(compiler, bytecode, OP_JUMP_8, &end_jump);
+
+    patch_jump(compiler, bytecode, false_jump);
+
+    result = compile_expression(compiler, node->ternary.else_expr, bytecode);
+    if (result != COMPILE_SUCCESS) return result;
+
+    patch_jump(compiler, bytecode, end_jump);
+
+    return COMPILE_SUCCESS;
 }
