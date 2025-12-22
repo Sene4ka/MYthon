@@ -7,15 +7,48 @@
 #include <time.h>
 #include <math.h>
 
+static NativeInfo native_functions[] = {
+        {"print", -1, 0},
+        {"len", 1, 1},
+        {"type", 1, 2},
+        {"exit", 1, 3},
+        {"time", 0, 4},
+        {"push", -1, 5},
+        {"pop", 1, 6},
+        {"random", 0, 7},
+        {"toString", 1, -1}, //
+        {"toInt", 1, -1},
+        {"toFloat", 1, -1},
+        {NULL, 0, -1}
+};
+
+NativeInfo* native_get_info(const char* name) {
+    for (int i = 0; native_functions[i].name != NULL; i++) {
+        if (strcmp(native_functions[i].name, name) == 0) {
+            return &native_functions[i];
+        }
+    }
+    return NULL;
+}
+
+int native_is_native(const char* name) {
+    return native_get_info(name) != NULL;
+}
+
+int native_get_global_index(const char* name) {
+    NativeInfo* info = native_get_info(name);
+    return info ? info->global_index : -1;
+}
+
 void native_register_all(VM* vm) {
-    vm_store_global(vm, 0, OBJECT_VAL(vm_copy_string(vm, "print", 5)));
-    vm_store_global(vm, 1, OBJECT_VAL(vm_copy_string(vm, "len", 3)));
-    vm_store_global(vm, 2, OBJECT_VAL(vm_copy_string(vm, "type", 4)));
-    vm_store_global(vm, 3, OBJECT_VAL(vm_copy_string(vm, "exit", 4)));
-    vm_store_global(vm, 4, OBJECT_VAL(vm_copy_string(vm, "time", 4)));
-    vm_store_global(vm, 5, OBJECT_VAL(vm_copy_string(vm, "push", 4)));
-    vm_store_global(vm, 6, OBJECT_VAL(vm_copy_string(vm, "pop", 3)));
-    vm_store_global(vm, 7,  OBJECT_VAL(vm_copy_string(vm, "random", 6)));
+    vm_store_global(vm, 0, OBJECT_VAL(vm_new_native_function(vm, "print", native_print, -1)));
+    vm_store_global(vm, 1, OBJECT_VAL(vm_new_native_function(vm, "len", native_len, 1)));
+    vm_store_global(vm, 2, OBJECT_VAL(vm_new_native_function(vm, "type", native_typeof, 1)));
+    vm_store_global(vm, 3, OBJECT_VAL(vm_new_native_function(vm, "exit", native_exit, 1)));
+    vm_store_global(vm, 4, OBJECT_VAL(vm_new_native_function(vm, "time", native_time, 0)));
+    vm_store_global(vm, 5, OBJECT_VAL(vm_new_native_function(vm, "push", native_array_push, -1)));
+    vm_store_global(vm, 6, OBJECT_VAL(vm_new_native_function(vm, "pop", native_array_pop, 1)));
+    vm_store_global(vm, 7, OBJECT_VAL(vm_new_native_function(vm, "random", native_random, 0)));
 }
 
 Value native_print(int arg_count, Value* args) {

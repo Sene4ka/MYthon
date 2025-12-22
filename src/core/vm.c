@@ -213,7 +213,20 @@ void vm_store_local(VM* vm, int index, Value value) {
     }
 
     CallFrame* frame = &vm->frames[vm->frame_count - 1];
-    if (index < 0 || index >= frame->slot_count) {
+
+    if (index >= frame->slot_count) {
+        int new_slot_count = index + 1;
+        frame->slots = GROW_ARRAY(Value, frame->slots,
+                                  frame->slot_count, new_slot_count);
+
+        for (int i = frame->slot_count; i < new_slot_count; i++) {
+            frame->slots[i] = NIL_VAL;
+        }
+
+        frame->slot_count = new_slot_count;
+    }
+
+    if (index < 0) {
         vm_runtime_error(vm, "Invalid local index: %d", index);
         return;
     }
@@ -359,35 +372,55 @@ void vm_runtime_error(VM* vm, const char* format, ...) {
 }
 
 Value vm_call_function(VM* vm, int function_index, int arg_count) {
-    if (function_index < 0 || function_index >= vm->constants.count) {
+    if (function_index < 0) {
+        vm_runtime_error(vm, "Invalid function call");
+        return NIL_VAL;
+    }
+
+    if (function_index >= vm->constants.count) {
         vm_runtime_error(vm, "Invalid function index: %d", function_index);
         return NIL_VAL;
     }
 
     Value func_val = vm->constants.values[function_index];
-    if (!IS_FUNCTION(func_val)) {
+
+    if (IS_FUNCTION(func_val)) {
+        FunctionObject* func = AS_FUNCTION(func_val);
+        vm_push_frame(vm, func->bytecode, func->arity);
+
+        CallFrame* frame = &vm->frames[vm->frame_count - 1];
+
+        for (int i = 0; i < arg_count && i < func->arity; i++) {
+            Value arg = vm_peek(vm, arg_count - 1 - i);
+            frame->slots[i] = arg;
+        }
+
+        for (int i = 0; i < arg_count; i++) {
+            vm_pop(vm);
+        }
+
+        InterpretResult result = vm_run(vm, func->bytecode);
+        if (result != INTERPRET_OK) {
+            return NIL_VAL;
+        }
+
+        if (vm->sp > 0) {
+            return vm_pop(vm);
+        }
+        return NIL_VAL;
+    }
+    else if (IS_NATIVE(func_val)) {
+        vm_runtime_error(vm, "Native function should be called directly");
+        return NIL_VAL;
+
+        // NativeFunctionObject* nativeObj = AS_NATIVE(func_val);
+        // Value result = nativeObj->function(0, NULL);
+        // return result;
+    }
+    else {
         vm_runtime_error(vm, "Not a function at index: %d", function_index);
         return NIL_VAL;
     }
-
-    FunctionObject* func = AS_FUNCTION(func_val);
-    vm_push_frame(vm, func->bytecode, func->arity);
-
-    CallFrame* frame = &vm->frames[vm->frame_count - 1];
-
-    for (int i = 0; i < arg_count && i < func->arity; i++) {
-        frame->slots[i] = vm_pop(vm);
-    }
-
-    InterpretResult result = vm_run(vm, func->bytecode);
-    if (result != INTERPRET_OK) {
-        return NIL_VAL;
-    }
-
-    if (vm->sp > 0) {
-        return vm_pop(vm);
-    }
-    return NIL_VAL;
 }
 
 Value vm_call_native(VM* vm, NativeFn function, int arg_count) {
@@ -752,10 +785,40 @@ static InterpretResult run(VM* vm) {
             }
 
             case OP_CALL_8: {
-                int arg_count = read_i8(ip);
-                ip += 1;
-                Value result = vm_call_function(vm, arg_count, arg_count);
-                vm_push(vm, result);
+                int arg_count = *ip++;
+
+                Value callee = vm_pop(vm);
+
+                if (IS_NATIVE(callee)) {
+                    NativeFunctionObject* nativeObj = AS_NATIVE(callee);
+                    NativeFn native = nativeObj->function;
+
+                    Value* args = NULL;
+                    if (arg_count > 0) {
+                        args = ALLOCATE(Value, arg_count);
+                        for (int i = 0; i < arg_count; i++) {
+                            args[arg_count - 1 - i] = vm_pop(vm);
+                        }
+                    }
+
+                    Value result = native(arg_count, args);
+
+                    if (args) {
+                        FREE_ARRAY(Value, args, arg_count);
+                    }
+
+                    vm_push(vm, result);
+                }
+                else if (IS_FUNCTION(callee)) {
+                    int function_index = AS_INT(callee);
+                    Value result = vm_call_function(vm, function_index, arg_count);
+                    vm_push(vm, result);
+                }
+                else {
+                    vm_runtime_error(vm, "Can only call functions, got %s",
+                                     vm_value_type_name(callee));
+                    return INTERPRET_RUNTIME_ERROR;
+                }
                 break;
             }
 
@@ -783,8 +846,39 @@ static InterpretResult run(VM* vm) {
             case OP_CALL_16: {
                 int arg_count = read_i16(ip);
                 ip += 2;
-                Value result = vm_call_function(vm, arg_count, arg_count);
-                vm_push(vm, result);
+
+                Value callee = vm_pop(vm);
+
+                if (IS_NATIVE(callee)) {
+                    NativeFunctionObject* nativeObj = AS_NATIVE(callee);
+                    NativeFn native = nativeObj->function;
+
+                    Value* args = NULL;
+                    if (arg_count > 0) {
+                        args = ALLOCATE(Value, arg_count);
+                        for (int i = 0; i < arg_count; i++) {
+                            args[arg_count - 1 - i] = vm_pop(vm);
+                        }
+                    }
+
+                    Value result = native(arg_count, args);
+
+                    if (args) {
+                        FREE_ARRAY(Value, args, arg_count);
+                    }
+
+                    vm_push(vm, result);
+                }
+                else if (IS_FUNCTION(callee)) {
+                    int function_index = AS_INT(callee);
+                    Value result = vm_call_function(vm, function_index, arg_count);
+                    vm_push(vm, result);
+                }
+                else {
+                    vm_runtime_error(vm, "Can only call functions, got %s",
+                                     vm_value_type_name(callee));
+                    return INTERPRET_RUNTIME_ERROR;
+                }
                 break;
             }
 
@@ -796,6 +890,15 @@ static InterpretResult run(VM* vm) {
                     return INTERPRET_RUNTIME_ERROR;
                 }
                 vm_push(vm, vm->constants.values[const_index]);
+                break;
+            }
+
+            case OP_LOAD_GLOBAL: {
+                uint16_t index = (ip[0] << 8) | ip[1];
+                ip += 2;
+
+                Value global = vm_load_global(vm, index);
+                vm_push(vm, global);
                 break;
             }
 
@@ -934,4 +1037,19 @@ InterpretResult vm_interpret(VM* vm, const char* source) {
     // Bytecode* bc = bytecode_new();
 
     return INTERPRET_COMPILE_ERROR;
+}
+
+NativeFunctionObject* vm_new_native_function(VM* vm, const char* name, NativeFn function, int arity) {
+    NativeFunctionObject* native = ALLOCATE(NativeFunctionObject, 1);
+    native->obj.type = VAL_NATIVE_FN;
+    native->obj.marked = 0;
+    native->obj.next = vm->objects;
+    vm->objects = (Object*)native;
+
+    native->function = function;
+    native->name = ALLOCATE(char, strlen(name) + 1);
+    strcpy(native->name, name);
+    native->arity = arity;
+
+    return native;
 }

@@ -50,6 +50,7 @@ typedef enum {
     OP_JUMP_32 = 0x42,
     OP_CALL_16 = 0x43,
     OP_LOAD_CONST = 0x44,
+    OP_LOAD_GLOBAL = 0x45,
 
     // Массивы
     OP_ARRAY_NEW = 0x50,

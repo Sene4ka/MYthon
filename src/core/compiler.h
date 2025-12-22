@@ -65,6 +65,7 @@ CompileResult compile_logical(Compiler* compiler, const ASTNode* node, Bytecode*
 CompileResult compile_array(Compiler* compiler, const ASTNode* node, Bytecode* bytecode);
 CompileResult compile_index(Compiler* compiler, const ASTNode* node, Bytecode* bytecode);
 CompileResult compile_member(Compiler* compiler, const ASTNode* node, Bytecode* bytecode);
+CompileResult compile_ternary(Compiler* compiler, const ASTNode* node, Bytecode* bytecode);
 
 CompileResult compile_if(Compiler* compiler, const ASTNode* node, Bytecode* bytecode);
 CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* bytecode);
