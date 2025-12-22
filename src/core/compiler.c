@@ -9,18 +9,18 @@
 static void init_locals(Compiler* compiler) {
     compiler->locals.names = ALLOCATE(char*, INITIAL_LOCALS_CAPACITY);
     compiler->locals.depths = ALLOCATE(int, INITIAL_LOCALS_CAPACITY);
-    compiler->locals.indices = ALLOCATE(int, INITIAL_LOCALS_CAPACITY);
     compiler->locals.count = 0;
     compiler->locals.capacity = INITIAL_LOCALS_CAPACITY;
 }
 
 void free_locals(Compiler* compiler) {
     for (int i = 0; i < compiler->locals.count; i++) {
-        FREE_ARRAY(char, compiler->locals.names[i], strlen(compiler->locals.names[i]) + 1);
+        if (compiler->locals.names[i]) {
+            FREE_ARRAY(char, compiler->locals.names[i], strlen(compiler->locals.names[i]) + 1);
+        }
     }
     FREE_ARRAY(char*, compiler->locals.names, compiler->locals.capacity);
     FREE_ARRAY(int, compiler->locals.depths, compiler->locals.capacity);
-    FREE_ARRAY(int, compiler->locals.indices, compiler->locals.capacity);
 }
 
 void compiler_free(Compiler* compiler) {
@@ -76,7 +76,7 @@ static void init_loop_jumps(Compiler* compiler) {
 
 CompileResult compiler_compile(Compiler* compiler, const ASTNode* ast, Bytecode* bytecode) {
     if (!ast) {
-        compiler_error(compiler, "Пустое AST");
+        compiler_error(compiler, "Empty AST");
         return COMPILE_ERROR;
     }
 
@@ -96,7 +96,7 @@ CompileResult compile_node(Compiler* compiler, const ASTNode* node, Bytecode* by
         case NODE_BLOCK_STMT:
             return compile_block(compiler, node, bytecode);
         case NODE_EXPR_STMT:
-            return compile_expression(compiler, node->binary.left, bytecode);
+            return compile_expression(compiler, node->expr_stmt.expression, bytecode);
         case NODE_IF_STMT:
             return compile_if(compiler, node, bytecode);
         case NODE_FOR_STMT:
@@ -107,6 +107,8 @@ CompileResult compile_node(Compiler* compiler, const ASTNode* node, Bytecode* by
             return compile_return(compiler, node, bytecode);
         case NODE_BREAK_STMT:
             return compile_break(compiler, bytecode);
+        case NODE_CONTINUE_STMT:
+            return compile_continue(compiler, bytecode);
         case NODE_GROUP_EXPR:
             return compile_expression(compiler, node->unary.operand, bytecode);
 
@@ -130,9 +132,11 @@ CompileResult compile_node(Compiler* compiler, const ASTNode* node, Bytecode* by
             return compile_array(compiler, node, bytecode);
         case NODE_INDEX_EXPR:
             return compile_index(compiler, node, bytecode);
+        case NODE_MEMBER_EXPR:
+            return compile_member(compiler, node, bytecode);
 
         default:
-            compiler_error_at_line(compiler, node->line, "Неизвестный тип узла AST");
+            compiler_error_at_line(compiler, node->line, "Unknown AST node type");
             return COMPILE_ERROR;
     }
 }
@@ -151,6 +155,7 @@ CompileResult compile_program(Compiler* compiler, const ASTNode* node, Bytecode*
 }
 
 CompileResult compile_block(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
+    int start_count = compiler->locals.count;
     compiler_begin_scope(compiler);
 
     ASTNode* stmt = node->block.statements;
@@ -161,7 +166,7 @@ CompileResult compile_block(Compiler* compiler, const ASTNode* node, Bytecode* b
         stmt = stmt->next;
     }
 
-    compiler_end_scope(compiler, bytecode);
+    compiler_end_scope(compiler, bytecode, start_count);
     return result;
 }
 
@@ -182,7 +187,7 @@ CompileResult compile_binary(Compiler* compiler, const ASTNode* node, Bytecode* 
 
     OpCode op = get_binary_opcode(node->binary.operator);
     if (op == 0) {
-        compiler_error_at_line(compiler, node->line, "Неизвестный бинарный оператор");
+        compiler_error_at_line(compiler, node->line, "Unknown binary operator");
         return COMPILE_ERROR;
     }
 
@@ -196,7 +201,7 @@ CompileResult compile_unary(Compiler* compiler, const ASTNode* node, Bytecode* b
 
     OpCode op = get_unary_opcode(node->unary.operator);
     if (op == 0) {
-        compiler_error_at_line(compiler, node->line, "Неизвестный унарный оператор");
+        compiler_error_at_line(compiler, node->line, "Unknown unary operator");
         return COMPILE_ERROR;
     }
 
@@ -206,7 +211,7 @@ CompileResult compile_unary(Compiler* compiler, const ASTNode* node, Bytecode* b
 
 CompileResult compile_postfix(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     if (node->postfix.operator != TOKEN_PLUS_PLUS && node->postfix.operator != TOKEN_MINUS_MINUS) {
-        compiler_error_at_line(compiler, node->line, "Неизвестный постфиксный оператор");
+        compiler_error_at_line(compiler, node->line, "Unknown postfix operator");
         return COMPILE_ERROR;
     }
 
@@ -294,7 +299,7 @@ CompileResult compile_literal(Compiler* compiler, const ASTNode* node, Bytecode*
 CompileResult compile_variable(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     int index = compiler_resolve_local(compiler, node->variable.name, node->variable.name_length);
     if (index < 0) {
-        compiler_error_at_line(compiler, node->line, "Неизвестная переменная");
+        compiler_error_at_line(compiler, node->line, "Unknown variable");
         return COMPILE_ERROR;
     }
 
@@ -310,33 +315,40 @@ CompileResult compile_variable(Compiler* compiler, const ASTNode* node, Bytecode
 }
 
 CompileResult compile_assign(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
-    if (node->assign.target->type != NODE_VARIABLE_EXPR) {
-        compiler_error_at_line(compiler, node->line, "Недопустимая цель присваивания");
-        return COMPILE_ERROR;
-    }
-
-    const char* name = node->assign.target->variable.name;
-    int length = node->assign.target->variable.name_length;
-
-    int index = compiler_resolve_local(compiler, name, length);
-    if (index < 0) {
-        index = compiler_add_local(compiler, name, length);
-        if (index < 0) {
-            compiler_error_at_line(compiler, node->line, "Не удалось добавить переменную");
-            return COMPILE_ERROR;
-        }
-        compiler_error_at_line(compiler, node->line, "Предупреждение: неявное объявление переменной");
-    }
-
     CompileResult result = compile_expression(compiler, node->assign.value, bytecode);
     if (result != COMPILE_SUCCESS) return result;
 
-    if (index <= 255) {
-        emit_op(compiler, bytecode, OP_STORE_LOCAL_8);
-        emit_u8(compiler, bytecode, (uint8_t)index);
+    if (node->assign.target->type == NODE_VARIABLE_EXPR) {
+        const char* name = node->assign.target->variable.name;
+        int length = node->assign.target->variable.name_length;
+
+        int index = compiler_resolve_local(compiler, name, length);
+        if (index < 0) {
+            index = compiler_add_local(compiler, name, length);
+            if (index < 0) {
+                compiler_error_at_line(compiler, node->line, "Failed to add variable");
+                return COMPILE_ERROR;
+            }
+        }
+
+        if (index <= 255) {
+            emit_op(compiler, bytecode, OP_STORE_LOCAL_8);
+            emit_u8(compiler, bytecode, (uint8_t)index);
+        } else {
+            emit_op(compiler, bytecode, OP_STORE_LOCAL_16);
+            emit_u16(compiler, bytecode, (uint16_t)index);
+        }
+    } else if (node->assign.target->type == NODE_INDEX_EXPR) {
+        result = compile_expression(compiler, node->assign.target->index.array, bytecode);
+        if (result != COMPILE_SUCCESS) return result;
+
+        result = compile_expression(compiler, node->assign.target->index.index, bytecode);
+        if (result != COMPILE_SUCCESS) return result;
+
+        emit_op(compiler, bytecode, OP_ARRAY_SET);
     } else {
-        emit_op(compiler, bytecode, OP_STORE_LOCAL_16);
-        emit_u16(compiler, bytecode, (uint16_t)index);
+        compiler_error_at_line(compiler, node->line, "Invalid assignment target");
+        return COMPILE_ERROR;
     }
 
     return COMPILE_SUCCESS;
@@ -347,7 +359,7 @@ CompileResult compile_call(Compiler* compiler, const ASTNode* node, Bytecode* by
         const char* name = node->call.callee->variable.name;
         if (strcmp(name, "print") == 0) {
             if (node->call.arg_count != 1) {
-                compiler_error_at_line(compiler, node->line, "Функция print принимает ровно 1 аргумент");
+                compiler_error_at_line(compiler, node->line, "print takes exactly 1 argument");
                 return COMPILE_ERROR;
             }
 
@@ -418,6 +430,18 @@ CompileResult compile_index(Compiler* compiler, const ASTNode* node, Bytecode* b
     return COMPILE_SUCCESS;
 }
 
+CompileResult compile_member(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
+    CompileResult result = compile_expression(compiler, node->member.object, bytecode);
+    if (result != COMPILE_SUCCESS) return result;
+
+    int const_idx = bc_add_constant_string(bytecode, node->member.name);
+    emit_op(compiler, bytecode, OP_LOAD_CONST);
+    emit_u32(compiler, bytecode, (uint32_t)const_idx);
+
+    emit_op(compiler, bytecode, OP_ARRAY_GET);
+    return COMPILE_SUCCESS;
+}
+
 CompileResult compile_if(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     CompileResult result = compile_expression(compiler, node->if_stmt.condition, bytecode);
     if (result != COMPILE_SUCCESS) return result;
@@ -447,6 +471,7 @@ CompileResult compile_if(Compiler* compiler, const ASTNode* node, Bytecode* byte
 
 CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     compiler_begin_loop(compiler);
+    int start_count = compiler->locals.count;
 
     if (node->for_stmt.initializer) {
         CompileResult result = compile_statement(compiler, node->for_stmt.initializer, bytecode);
@@ -455,12 +480,15 @@ CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* byt
 
     size_t loop_start = bc_get_current_address(bytecode);
 
+    size_t exit_jump;
+    //int has_exit_jump = 0;
+
     if (node->for_stmt.condition) {
         CompileResult result = compile_expression(compiler, node->for_stmt.condition, bytecode);
         if (result != COMPILE_SUCCESS) return result;
 
-        size_t exit_jump;
         emit_jump(compiler, bytecode, OP_JUMP_IF_FALSE_8, &exit_jump);
+        //has_exit_jump = 1;
 
         compiler->loop.break_jumps[compiler->loop.break_count++] = exit_jump;
     }
@@ -483,18 +511,35 @@ CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* byt
     }
     compiler->loop.continue_count = 0;
 
+    size_t current_end = bc_get_current_address(bytecode);
     for (int i = 0; i < compiler->loop.break_count; i++) {
-        compiler_patch_breaks(compiler, bytecode, bc_get_current_address(bytecode));
+        bc_patch_i16(bytecode, compiler->loop.break_jumps[i], (int16_t)(current_end - compiler->loop.break_jumps[i] - 2));
     }
     compiler->loop.break_count = 0;
 
     compiler_end_loop(compiler, bytecode);
+
+    // Clean up loop locals
+    while (compiler->locals.count > start_count) {
+        compiler->locals.count--;
+        if (compiler->locals.names[compiler->locals.count]) {
+            FREE_ARRAY(char, compiler->locals.names[compiler->locals.count],
+                       strlen(compiler->locals.names[compiler->locals.count]) + 1);
+        }
+    }
+
     return COMPILE_SUCCESS;
 }
 
 CompileResult compile_function(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     compiler_begin_function(compiler, node->function_stmt.name);
+
+    //int start_count = compiler->locals.count;
     compiler_begin_scope(compiler);
+
+    if (node->function_stmt.name) {
+        compiler_add_local(compiler, node->function_stmt.name, strlen(node->function_stmt.name));
+    }
 
     for (size_t i = 0; i < node->function_stmt.param_count; i++) {
         compiler_add_local(compiler, node->function_stmt.parameters[i],
@@ -511,7 +556,6 @@ CompileResult compile_function(Compiler* compiler, const ASTNode* node, Bytecode
         emit_op(compiler, bytecode, OP_RETURN_NIL);
     }
 
-    compiler_end_scope(compiler, bytecode);
     compiler_end_function(compiler);
 
     return COMPILE_SUCCESS;
@@ -519,7 +563,7 @@ CompileResult compile_function(Compiler* compiler, const ASTNode* node, Bytecode
 
 CompileResult compile_return(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     if (compiler->function.function_depth == 0) {
-        compiler_error_at_line(compiler, node->line, "'return' вне функции");
+        compiler_error_at_line(compiler, node->line, "'return' outside function");
         return COMPILE_ERROR;
     }
 
@@ -538,7 +582,7 @@ CompileResult compile_return(Compiler* compiler, const ASTNode* node, Bytecode* 
 
 CompileResult compile_break(Compiler* compiler, Bytecode* bytecode) {
     if (compiler->loop.loop_depth == 0) {
-        compiler_error(compiler, "'break' вне цикла");
+        compiler_error(compiler, "'break' outside loop");
         return COMPILE_ERROR;
     }
 
@@ -556,12 +600,33 @@ CompileResult compile_break(Compiler* compiler, Bytecode* bytecode) {
     return COMPILE_SUCCESS;
 }
 
+CompileResult compile_continue(Compiler* compiler, Bytecode* bytecode) {
+    if (compiler->loop.loop_depth == 0) {
+        compiler_error(compiler, "'continue' outside loop");
+        return COMPILE_ERROR;
+    }
+
+    size_t jump_address;
+    emit_jump(compiler, bytecode, OP_JUMP_8, &jump_address);
+
+    if (compiler->loop.continue_count >= compiler->loop.continue_capacity) {
+        compiler->loop.continue_capacity *= 2;
+        compiler->loop.continue_jumps = GROW_ARRAY(size_t, compiler->loop.continue_jumps,
+                                                   compiler->loop.continue_count,
+                                                   compiler->loop.continue_capacity);
+    }
+
+    compiler->loop.continue_jumps[compiler->loop.continue_count++] = jump_address;
+    return COMPILE_SUCCESS;
+}
+
 int compiler_resolve_local(Compiler* compiler, const char* name, int length) {
     for (int i = compiler->locals.count - 1; i >= 0; i--) {
         if (compiler->locals.depths[i] != -1 &&
+            compiler->locals.names[i] != NULL &&
             strncmp(compiler->locals.names[i], name, (size_t)length) == 0 &&
-            strlen(compiler->locals.names[i]) == (size_t)length) {
-            return compiler->locals.indices[i];
+            (int)strlen(compiler->locals.names[i]) == length) {
+            return i;
         }
     }
     return -1;
@@ -574,17 +639,13 @@ int compiler_add_local(Compiler* compiler, const char* name, int length) {
                                             compiler->locals.capacity, new_capacity);
         compiler->locals.depths = GROW_ARRAY(int, compiler->locals.depths,
                                              compiler->locals.capacity, new_capacity);
-        compiler->locals.indices = GROW_ARRAY(int, compiler->locals.indices,
-                                              compiler->locals.capacity, new_capacity);
         compiler->locals.capacity = new_capacity;
     }
 
     compiler->locals.names[compiler->locals.count] = ALLOCATE(char, length + 1);
-    strncpy(compiler->locals.names[compiler->locals.count], name, length);
+    memcpy(compiler->locals.names[compiler->locals.count], name, length);
     compiler->locals.names[compiler->locals.count][length] = '\0';
-
     compiler->locals.depths[compiler->locals.count] = compiler->scope_depth;
-    compiler->locals.indices[compiler->locals.count] = compiler->locals.count;
 
     return compiler->locals.count++;
 }
@@ -593,24 +654,14 @@ void compiler_begin_scope(Compiler* compiler) {
     compiler->scope_depth++;
 }
 
-void compiler_end_scope(Compiler* compiler, Bytecode* bytecode) {
+void compiler_end_scope(Compiler* compiler, Bytecode* bytecode, int start_count) {
     compiler->scope_depth--;
 
-    int locals_to_pop = 0;
-    for (int i = compiler->locals.count - 1; i >= 0; i--) {
-        if (compiler->locals.depths[i] > compiler->scope_depth) {
-            locals_to_pop++;
-            compiler->locals.depths[i] = -1;
-        } else {
-            break;
-        }
-    }
-
-    for (int i = 0; i < locals_to_pop; i++) {
+    // Pop locals that were added in this scope
+    while (compiler->locals.count > start_count) {
         emit_op(compiler, bytecode, OP_POP);
+        compiler->locals.count--;
     }
-
-    compiler->locals.count -= locals_to_pop;
 }
 
 void compiler_begin_loop(Compiler* compiler) {
@@ -621,8 +672,6 @@ void compiler_begin_loop(Compiler* compiler) {
 void compiler_end_loop(Compiler* compiler, Bytecode* bytecode) {
     (void)bytecode;
     compiler->loop.loop_depth--;
-    compiler->loop.break_count = 0;
-    compiler->loop.continue_count = 0;
 }
 
 void compiler_patch_breaks(Compiler* compiler, Bytecode* bytecode, size_t target) {
@@ -722,7 +771,7 @@ void compiler_error(Compiler* compiler, const char* message) {
     compiler->error_count++;
     compiler->error_message = message;
 
-    fprintf(stderr, "[%s] Ошибка компиляции: %s\n",
+    fprintf(stderr, "[%s] Compile error: %s\n",
             compiler->source_file ? compiler->source_file : "<source>",
             message);
 }
@@ -731,7 +780,7 @@ void compiler_error_at_line(Compiler* compiler, int line, const char* message) {
     compiler->error_count++;
     compiler->error_message = message;
 
-    fprintf(stderr, "[%s:%d] Ошибка компиляции: %s\n",
+    fprintf(stderr, "[%s:%d] Compile error: %s\n",
             compiler->source_file ? compiler->source_file : "<source>",
             line, message);
 }
@@ -795,95 +844,4 @@ OpCode get_postfix_opcode(TokenType type) {
 
 int should_emit_short(int value) {
     return value >= -128 && value <= 127;
-}
-
-// ?
-void optimize_bytecode(Bytecode* bytecode) {
-    if (!bytecode || bytecode->length < 2) return;
-
-    int optimized;
-    do {
-        optimized = 0;
-
-        size_t new_len = 0;
-        for (size_t i = 0; i < bytecode->length; ) {
-            uint8_t op = bytecode->code[i];
-            uint8_t operand_len = opcode_operand_length[op];
-
-            if (op == OP_NOP) {
-                optimized = 1;
-                i += 1 + operand_len;
-                continue;
-            }
-
-            for (size_t j = 0; j < 1 + operand_len && i + j < bytecode->length; j++) {
-                bytecode->code[new_len + j] = bytecode->code[i + j];
-                if (bytecode->line_numbers) {
-                    bytecode->line_numbers[new_len + j] = bytecode->line_numbers[i + j];
-                }
-            }
-
-            new_len += 1 + operand_len;
-            i += 1 + operand_len;
-        }
-
-        bytecode->length = new_len;
-
-        for (size_t i = 0; i + 3 < bytecode->length; i++) {
-            uint8_t op1 = bytecode->code[i];
-            uint8_t op2 = bytecode->code[i + 1];
-
-            if ((op1 == OP_PUSH_I8 && opcode_operand_length[op1] == 1) &&
-                (op2 == OP_PUSH_I8 && opcode_operand_length[op2] == 1)) {
-
-                int8_t val1 = (int8_t)bytecode->code[i + 1];
-                int8_t val2 = (int8_t)bytecode->code[i + 3];
-
-                if (i + 4 < bytecode->length) {
-                    uint8_t op3 = bytecode->code[i + 4];
-
-                    int8_t result = 0;
-                    int can_fold = 0;
-
-                    switch (op3) {
-                        case OP_ADD:
-                            result = val1 + val2;
-                            can_fold = 1;
-                            break;
-                        case OP_SUB:
-                            result = val1 - val2;
-                            can_fold = 1;
-                            break;
-                        case OP_MUL:
-                            result = val1 * val2;
-                            can_fold = 1;
-                            break;
-                        case OP_DIV:
-                            if (val2 != 0) {
-                                result = val1 / val2;
-                                can_fold = 1;
-                            }
-                            break;
-                    }
-
-                    if (can_fold) {
-                        bytecode->code[i] = OP_PUSH_I8;
-                        bytecode->code[i + 1] = (uint8_t)result;
-
-                        for (size_t j = i + 2; j + 3 < bytecode->length; j++) {
-                            bytecode->code[j] = bytecode->code[j + 3];
-                            if (bytecode->line_numbers) {
-                                bytecode->line_numbers[j] = bytecode->line_numbers[j + 3];
-                            }
-                        }
-
-                        bytecode->length -= 3;
-                        optimized = 1;
-                        break;
-                    }
-                }
-            }
-        }
-
-    } while (optimized);
 }

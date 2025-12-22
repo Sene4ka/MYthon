@@ -1,12 +1,47 @@
+#include "cli/cli.h"
 #include <stdio.h>
+#include <stdlib.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 int main(int argc, char *argv[]) {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+#endif
 
-    printf("%d", argc);
+    CLIArgs args = parse_args(argc, argv);
+    int result = 0;
 
-    for (int i = 0; i < argc; i++) {
-        printf("%s", argv[i]);
+    switch (args.mode) {
+        case MODE_RUN:
+            result = run_file(args);
+            break;
+        case MODE_COMPILE:
+            result = compile_file(args);
+            break;
+        case MODE_EXEC:
+            result = exec_bytecode_file(args);
+            break;
+        case MODE_DISASM:
+            result = disassemble_file(args);
+            break;
+        case MODE_REPL:
+            result = start_repl(args);
+            break;
+        case MODE_HELP:
+            print_usage();
+            break;
+        case MODE_VERSION:
+            print_version();
+            break;
+        default:
+            fprintf(stderr, "Unknown mode\n");
+            result = 1;
     }
 
-    return 0;
+    free(args.input_file);
+    free(args.output_file);
+    return result;
 }

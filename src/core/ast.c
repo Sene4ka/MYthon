@@ -21,6 +21,14 @@ ASTNode* ast_new_binary(ASTNode* left, ASTNode* right, TokenType operator, int l
     return node;
 }
 
+ASTNode* ast_new_ternary(ASTNode* condition, ASTNode* then_expr, ASTNode* else_expr, int line, int column) {
+    ASTNode* node = ast_new_node(NODE_TERNARY_EXPR, line, column);
+    node->ternary.condition = condition;
+    node->ternary.then_expr = then_expr;
+    node->ternary.else_expr = else_expr;
+    return node;
+}
+
 ASTNode* ast_new_unary(ASTNode* operand, TokenType operator, int line, int column) {
     ASTNode* node = ast_new_node(NODE_UNARY_EXPR, line, column);
     node->unary.operand = operand;
@@ -138,8 +146,7 @@ ASTNode* ast_new_program(ASTNode* statements, int line, int column) {
 
 ASTNode* ast_new_expr_stmt(ASTNode* expression, int line, int column) {
     ASTNode* node = ast_new_node(NODE_EXPR_STMT, line, column);
-    node->binary.left = expression;
-    node->binary.right = NULL;
+    node->expr_stmt.expression = expression;
     return node;
 }
 
@@ -165,6 +172,34 @@ ASTNode* ast_new_logical(ASTNode* left, ASTNode* right, TokenType operator, int 
     return node;
 }
 
+ASTNode* ast_new_break(int line, int column) {
+    ASTNode* node = ast_new_node(NODE_BREAK_STMT, line, column);
+    return node;
+}
+
+ASTNode* ast_new_continue(ASTNode* target, ASTNode* value, int line, int column) {
+    ASTNode* node = ast_new_node(NODE_CONTINUE_STMT, line, column);
+    node->continue_stmt.target = target;
+    node->continue_stmt.value = value;
+    return node;
+}
+
+ASTNode* ast_new_group(ASTNode* expression, int line, int column) {
+    ASTNode* node = ast_new_node(NODE_GROUP_EXPR, line, column);
+    node->unary.operand = expression;
+    return node;
+}
+
+ASTNode* ast_new_member(ASTNode* object, const char* name, size_t length, int line, int column) {
+    ASTNode* node = ast_new_node(NODE_MEMBER_EXPR, line, column);
+    node->member.object = object;
+    node->member.name = ALLOCATE(char, length + 1);
+    memcpy(node->member.name, name, length);
+    node->member.name[length] = '\0';
+    node->member.name_length = length;
+    return node;
+}
+
 void ast_free(ASTNode* node) {
     if (!node) return;
 
@@ -174,12 +209,16 @@ void ast_free(ASTNode* node) {
             ast_free(node->binary.right);
             break;
 
-        case NODE_UNARY_EXPR:
-            ast_free(node->unary.operand);
+        case NODE_TERNARY_EXPR:
+            ast_free(node->ternary.condition);
+            ast_free(node->ternary.then_expr);
+            ast_free(node->ternary.else_expr);
             break;
 
+        case NODE_UNARY_EXPR:
         case NODE_POSTFIX_EXPR:
-            ast_free(node->postfix.operand);
+        case NODE_GROUP_EXPR:
+            ast_free(node->unary.operand);
             break;
 
         case NODE_LITERAL_EXPR:
@@ -218,8 +257,15 @@ void ast_free(ASTNode* node) {
             ast_free(node->logical.right);
             break;
 
+        case NODE_MEMBER_EXPR:
+            ast_free(node->member.object);
+            if (node->member.name) {
+                FREE_ARRAY(char, node->member.name, node->member.name_length + 1);
+            }
+            break;
+
         case NODE_EXPR_STMT:
-            ast_free(node->binary.left);
+            ast_free(node->expr_stmt.expression);
             break;
 
         case NODE_BLOCK_STMT:
@@ -263,6 +309,10 @@ void ast_free(ASTNode* node) {
             }
             break;
 
+        case NODE_BREAK_STMT:
+        case NODE_CONTINUE_STMT:
+            break;
+
         case NODE_PROGRAM:
             ast_free(node->program.statements);
             break;
@@ -288,7 +338,6 @@ static void print_indent(int indent) {
         printf("  ");
     }
 }
-
 
 static const char* token_type_to_string_simple(TokenType type) {
     switch (type) {
@@ -336,6 +385,8 @@ static const char* token_type_to_string_simple(TokenType type) {
         case TOKEN_RIGHT_PAREN: return ")";
         case TOKEN_LEFT_BRACE: return "{";
         case TOKEN_RIGHT_BRACE: return "}";
+        case TOKEN_LEFT_BRACKET: return "[";
+        case TOKEN_RIGHT_BRACKET: return "]";
 
         default: return "?";
     }
@@ -353,6 +404,19 @@ void ast_print(const ASTNode* node, int indent) {
                    node->line, node->column);
             ast_print(node->binary.left, indent + 1);
             ast_print(node->binary.right, indent + 1);
+            break;
+
+        case NODE_TERNARY_EXPR:
+            printf("Ternary at %d:%d\n", node->line, node->column);
+            print_indent(indent + 1);
+            printf("Condition:\n");
+            ast_print(node->ternary.condition, indent + 2);
+            print_indent(indent + 1);
+            printf("Then:\n");
+            ast_print(node->ternary.then_expr, indent + 2);
+            print_indent(indent + 1);
+            printf("Else:\n");
+            ast_print(node->ternary.else_expr, indent + 2);
             break;
 
         case NODE_UNARY_EXPR:
@@ -432,9 +496,14 @@ void ast_print(const ASTNode* node, int indent) {
             ast_print(node->logical.right, indent + 1);
             break;
 
+        case NODE_MEMBER_EXPR:
+            printf("Member(%s) at %d:%d\n", node->member.name, node->line, node->column);
+            ast_print(node->member.object, indent + 1);
+            break;
+
         case NODE_EXPR_STMT:
             printf("ExprStmt at %d:%d\n", node->line, node->column);
-            ast_print(node->binary.left, indent + 1);
+            ast_print(node->expr_stmt.expression, indent + 1);
             break;
 
         case NODE_BLOCK_STMT:
@@ -491,6 +560,14 @@ void ast_print(const ASTNode* node, int indent) {
             }
             break;
 
+        case NODE_BREAK_STMT:
+            printf("Break at %d:%d\n", node->line, node->column);
+            break;
+
+        case NODE_CONTINUE_STMT:
+            printf("Continue at %d:%d\n", node->line, node->column);
+            break;
+
         case NODE_PROGRAM:
             printf("Program at %d:%d\n", node->line, node->column);
             ast_print(node->program.statements, indent + 1);
@@ -509,6 +586,7 @@ void ast_print(const ASTNode* node, int indent) {
 const char* node_type_to_string(NodeType type) {
     switch (type) {
         case NODE_BINARY_EXPR: return "BinaryExpr";
+        case NODE_TERNARY_EXPR: return "TernaryExpr";
         case NODE_UNARY_EXPR: return "UnaryExpr";
         case NODE_POSTFIX_EXPR: return "PostfixExpr";
         case NODE_LITERAL_EXPR: return "LiteralExpr";
@@ -518,12 +596,15 @@ const char* node_type_to_string(NodeType type) {
         case NODE_ARRAY_EXPR: return "ArrayExpr";
         case NODE_INDEX_EXPR: return "IndexExpr";
         case NODE_LOGICAL_EXPR: return "LogicalExpr";
+        case NODE_MEMBER_EXPR: return "MemberExpr";
         case NODE_EXPR_STMT: return "ExprStmt";
         case NODE_BLOCK_STMT: return "BlockStmt";
         case NODE_IF_STMT: return "IfStmt";
         case NODE_FOR_STMT: return "ForStmt";
         case NODE_FUNCTION_STMT: return "FunctionStmt";
         case NODE_RETURN_STMT: return "ReturnStmt";
+        case NODE_BREAK_STMT: return "BreakStmt";
+        case NODE_CONTINUE_STMT: return "ContinueStmt";
         case NODE_PROGRAM: return "Program";
         default: return "Unknown";
     }
@@ -543,15 +624,4 @@ ASTNode* ast_last_statement(ASTNode* statements) {
         current = current->next;
     }
     return current;
-}
-
-ASTNode* ast_new_break(int line, int column) {
-    ASTNode* node = ast_new_node(NODE_BREAK_STMT, line, column);
-    return node;
-}
-
-ASTNode* ast_new_group(ASTNode* expression, int line, int column) {
-    ASTNode* node = ast_new_node(NODE_GROUP_EXPR, line, column);
-    node->unary.operand = expression; // Используем существующую структуру unary
-    return node;
 }
