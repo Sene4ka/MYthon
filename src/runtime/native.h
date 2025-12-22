@@ -15,5 +15,6 @@ Value native_to_int(int arg_count, Value* args);
 Value native_to_float(int arg_count, Value* args);
 Value native_exit(int arg_count, Value* args);
 Value native_time(int arg_count, Value* args);
+Value native_random(int arg_count, Value* args);
 
 #endif

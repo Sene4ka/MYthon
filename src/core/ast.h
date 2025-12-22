@@ -6,6 +6,7 @@
 
 typedef enum {
     NODE_BINARY_EXPR,
+    NODE_TERNARY_EXPR,
     NODE_UNARY_EXPR,
     NODE_POSTFIX_EXPR,
     NODE_LITERAL_EXPR,
@@ -16,6 +17,7 @@ typedef enum {
     NODE_ARRAY_EXPR,
     NODE_INDEX_EXPR,
     NODE_LOGICAL_EXPR,
+    NODE_MEMBER_EXPR,
 
     NODE_EXPR_STMT,
     NODE_BLOCK_STMT,
@@ -24,6 +26,7 @@ typedef enum {
     NODE_RETURN_STMT,
     NODE_FUNCTION_STMT,
     NODE_BREAK_STMT,
+    NODE_CONTINUE_STMT,
 
     NODE_PROGRAM
 } NodeType;
@@ -43,6 +46,12 @@ struct ASTNode {
             ASTNode* right;
             TokenType operator;
         } binary;
+
+        struct {
+            ASTNode* condition;
+            ASTNode* then_expr;
+            ASTNode* else_expr;
+        } ternary;
 
         struct {
             ASTNode* operand;
@@ -101,6 +110,12 @@ struct ASTNode {
         } logical;
 
         struct {
+            ASTNode* object;
+            char* name;
+            size_t name_length;
+        } member;
+
+        struct {
             ASTNode* statements;
         } block;
 
@@ -132,12 +147,21 @@ struct ASTNode {
         struct {
             ASTNode* statements;
         } program;
+
+        struct {
+            ASTNode* expression;
+        } expr_stmt;
+
+        struct {
+            ASTNode* target;
+            ASTNode* value;
+        } continue_stmt;
     };
 };
 
-
 ASTNode* ast_new_node(NodeType type, int line, int column);
 ASTNode* ast_new_binary(ASTNode* left, ASTNode* right, TokenType operator, int line, int column);
+ASTNode* ast_new_ternary(ASTNode* condition, ASTNode* then_expr, ASTNode* else_expr, int line, int column);
 ASTNode* ast_new_unary(ASTNode* operand, TokenType operator, int line, int column);
 ASTNode* ast_new_postfix(ASTNode* operand, TokenType operator, int line, int column);
 ASTNode* ast_new_number_literal(double value, int line, int column);
@@ -158,26 +182,19 @@ ASTNode* ast_new_array(ASTNode** elements, size_t count, int line, int column);
 ASTNode* ast_new_index(ASTNode* array, ASTNode* index, int line, int column);
 ASTNode* ast_new_logical(ASTNode* left, ASTNode* right, TokenType operator, int line, int column);
 ASTNode* ast_new_break(int line, int column);
+ASTNode* ast_new_continue(ASTNode* target, ASTNode* value, int line, int column);
 ASTNode* ast_new_group(ASTNode* expression, int line, int column);
-
+ASTNode* ast_new_member(ASTNode* object, const char* name, size_t length, int line, int column);
 
 void ast_free(ASTNode* node);
 void ast_free_array(ASTNode** nodes, size_t count);
 
-
 void ast_print(const ASTNode* node, int indent);
 const char* node_type_to_string(NodeType type);
-
 
 int ast_node_is_statement(NodeType type);
 int ast_node_is_expression(NodeType type);
 ASTNode* ast_last_statement(ASTNode* statements);
-
-
-TokenType node_type_to_token_type(NodeType node_type);
-NodeType token_type_to_node_type(TokenType token_type);
-const char* operator_to_string(TokenType operator);
-
 
 int get_operator_precedence(TokenType type);
 int is_assignment_operator(TokenType type);

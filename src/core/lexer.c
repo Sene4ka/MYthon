@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "utils.h"
+
 typedef struct {
     const char* keyword;
     TokenType type;
@@ -412,7 +414,7 @@ const char* token_type_to_string(TokenType type) {
         case TOKEN_SUPER: return "SUPER";
         case TOKEN_THIS: return "THIS";
         case TOKEN_TRUE: return "TRUE";
-        case TOKEN_VAR: return "VAR";
+        case TOKEN_LET: return "LET";
         case TOKEN_WHILE: return "WHILE";
         case TOKEN_BREAK: return "BREAK";
         case TOKEN_EOF: return "EOF";
@@ -427,7 +429,9 @@ char* token_copy_text(const Token* token) {
         result[0] = '\0';
         return result;
     }
-
+    if (token->type == TOKEN_ERROR) {
+        return copy_string((const char*)token->start);
+    }
     char* result = ALLOCATE(char, token->length + 1);
     memcpy(result, token->start, token->length);
     result[token->length] = '\0';
