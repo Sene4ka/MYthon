@@ -1,0 +1,6 @@
+for (let i = 0; i < 7; i = i + 1) {
+    print(i)
+}
+for (let i = 0; i < 10; i = i + 1) {
+    print(i)
+}

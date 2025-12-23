@@ -29,6 +29,7 @@ lib/
 *.ko
 *.obj
 *.elf
+*.cmth
 
 # Precompiled Headers
 *.gch

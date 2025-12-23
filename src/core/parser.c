@@ -254,29 +254,18 @@ static ASTNode* parse_for_statement(Parser* parser) {
     int line = parser->previous.line;
     int column = parser->previous.column;
 
-#ifdef DEBUG
-    printf("[DEBUG] parse_for_statement: начинаем парсинг for\n");
-#endif
-
     parser->in_loop++;
     parser_consume(parser, TOKEN_LEFT_PAREN, "Ожидается '(' после 'for'");
 
     ASTNode* initializer = NULL;
     if (!parser_match(parser, TOKEN_SEMICOLON)) {
         if (parser_match(parser, TOKEN_LET) || parser_match(parser, TOKEN_VAR)) {
-#ifdef DEBUG
-            printf("[DEBUG] parse_for_statement: найден let/var в инициализаторе\n");
-#endif
             initializer = parse_var_declaration_no_semi(parser);
             parser_consume(parser, TOKEN_SEMICOLON, "Ожидается ';' после инициализации for");
         } else {
             initializer = parse_expression(parser);
             parser_consume(parser, TOKEN_SEMICOLON, "Ожидается ';' после инициализации for");
         }
-    } else {
-#ifdef DEBUG
-        printf("[DEBUG] parse_for_statement: инициализатор пропущен\n");
-#endif
     }
 
     ASTNode* condition = NULL;
@@ -295,10 +284,6 @@ static ASTNode* parse_for_statement(Parser* parser) {
 
     ASTNode* body = parse_statement(parser);
     parser->in_loop--;
-
-#ifdef DEBUG
-    printf("[DEBUG] parse_for_statement: for завершен\n");
-#endif
 
     return ast_new_for(initializer, condition, increment, body, line, column);
 }

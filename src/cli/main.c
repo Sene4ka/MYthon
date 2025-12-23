@@ -41,6 +41,8 @@ int main(int argc, char *argv[]) {
             result = 1;
     }
 
+    printf("Finished with exit code %d", result);
+
     free(args.input_file);
     free(args.output_file);
     return result;

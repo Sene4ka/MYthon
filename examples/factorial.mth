@@ -5,6 +5,6 @@ fn factorial(n) {
     return n * factorial(n - 1)
 }
 
-result = factorial(100)
-print("Факториал 100:")
+result = factorial(50)
+print("Факториал 50:")
 print(result)

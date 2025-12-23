@@ -42,6 +42,8 @@ typedef struct {
 
     const char* source_file;
     int current_line;
+
+    int locals_at_toplevel;
 } Compiler;
 
 void compiler_init(Compiler* compiler, const char* source_file);

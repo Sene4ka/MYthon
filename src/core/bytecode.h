@@ -95,6 +95,9 @@ typedef struct {
     size_t capacity;
     size_t length;
 
+    int main_locals;
+    size_t main_entry;
+
     Constant* constants;
     size_t const_capacity;
     size_t const_count;
@@ -112,6 +115,8 @@ typedef struct {
 
 Bytecode* bytecode_new(void);
 void bytecode_free(Bytecode* bc);
+
+void bc_debug_dump_header(const Bytecode* bc);
 
 void bc_write_byte(Bytecode* bc, uint8_t byte, int line);
 void bc_write_op(Bytecode* bc, OpCode op, int line);

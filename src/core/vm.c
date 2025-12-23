@@ -21,6 +21,102 @@ static uint32_t hash_string(const char* str, int length) {
     return hash;
 }
 
+static const char* opcode_name(uint8_t opcode) {
+    switch (opcode) {
+        case OP_NOP: return "NOP";
+        case OP_HALT: return "HALT";
+        case OP_ADD: return "ADD";
+        case OP_SUB: return "SUB";
+        case OP_MUL: return "MUL";
+        case OP_DIV: return "DIV";
+        case OP_MOD: return "MOD";
+        case OP_NEG: return "NEG";
+        case OP_NOT: return "NOT";
+        case OP_EQ: return "EQ";
+        case OP_NEQ: return "NEQ";
+        case OP_LT: return "LT";
+        case OP_LE: return "LE";
+        case OP_GT: return "GT";
+        case OP_GE: return "GE";
+        case OP_AND: return "AND";
+        case OP_OR: return "OR";
+        case OP_PUSH_I8: return "PUSH_I8";
+        case OP_PUSH_NIL: return "PUSH_NIL";
+        case OP_PUSH_TRUE: return "PUSH_TRUE";
+        case OP_PUSH_FALSE: return "PUSH_FALSE";
+        case OP_STORE_LOCAL_8: return "STORE_LOCAL_8";
+        case OP_LOAD_LOCAL_8: return "LOAD_LOCAL_8";
+        case OP_JUMP_8: return "JUMP_8";
+        case OP_JUMP_IF_TRUE_8: return "JUMP_IF_TRUE_8";
+        case OP_JUMP_IF_FALSE_8: return "JUMP_IF_FALSE_8";
+        case OP_POP: return "POP";
+        case OP_PUSH_I16: return "PUSH_I16";
+        case OP_STORE_LOCAL_16: return "STORE_LOCAL_16";
+        case OP_LOAD_LOCAL_16: return "LOAD_LOCAL_16";
+        case OP_JUMP_16: return "JUMP_16";
+        case OP_JUMP_IF_TRUE_16: return "JUMP_IF_TRUE_16";
+        case OP_JUMP_IF_FALSE_16: return "JUMP_IF_FALSE_16";
+        case OP_CALL_8: return "CALL_8";
+        case OP_PUSH_I32: return "PUSH_I32";
+        case OP_PUSH_F32: return "PUSH_F32";
+        case OP_JUMP_32: return "JUMP_32";
+        case OP_CALL_16: return "CALL_16";
+        case OP_LOAD_CONST: return "LOAD_CONST";
+        case OP_LOAD_GLOBAL: return "LOAD_GLOBAL";
+        case OP_ARRAY_NEW: return "ARRAY_NEW";
+        case OP_ARRAY_GET: return "ARRAY_GET";
+        case OP_ARRAY_SET: return "ARRAY_SET";
+        case OP_ARRAY_LEN: return "ARRAY_LEN";
+        case OP_CALL_NATIVE: return "CALL_NATIVE";
+        case OP_RETURN: return "RETURN";
+        case OP_RETURN_NIL: return "RETURN_NIL";
+        case OP_PRINT: return "PRINT";
+        case OP_DUP: return "DUP";
+        case OP_BREAK: return "BREAK";
+        default: return "UNKNOWN";
+    }
+}
+
+static void debug_print_value(Value v) {
+    switch (v.type) {
+        case VAL_NIL:   fprintf(stderr, "nil"); break;
+        case VAL_BOOL:  fprintf(stderr, v.as.boolean ? "true" : "false"); break;
+        case VAL_INT:   fprintf(stderr, "%lld", (long long)v.as.integer); break;
+        case VAL_FLOAT: fprintf(stderr, "%g", v.as.floating); break;
+        case VAL_STRING: {
+            StringObject* s = AS_STRING(v);
+            fprintf(stderr, "\"%.*s\"", s->length, s->chars);
+            break;
+        }
+        case VAL_ARRAY:    fprintf(stderr, "[array]"); break;
+        case VAL_FUNCTION: fprintf(stderr, "[function]"); break;
+        case VAL_NATIVE_FN:fprintf(stderr, "[native]"); break;
+        case VAL_CLOSURE:  fprintf(stderr, "[closure]"); break;
+        default:           fprintf(stderr, "[unknown]"); break;
+    }
+}
+
+static void debug_print_stack(VM* vm) {
+    fprintf(stderr, "  STACK[0..%d): [", vm->sp);
+    for (int i = 0; i < vm->sp; i++) {
+        if (i > 0) fprintf(stderr, ", ");
+        debug_print_value(vm->stack[i]);
+    }
+    fprintf(stderr, "]\n");
+}
+
+static void debug_print_frame_locals(VM* vm) {
+    if (vm->frame_count == 0) return;
+    CallFrame* f = &vm->frames[vm->frame_count - 1];
+    fprintf(stderr, "  FRAME #%d locals[0..%d): [",
+            vm->frame_count - 1, f->slot_count);
+    for (int i = 0; i < f->slot_count; i++) {
+        if (i > 0) fprintf(stderr, ", ");
+        debug_print_value(f->slots[i]);
+    }
+    fprintf(stderr, "]\n");
+}
+
 static int read_i8(uint8_t* ip) {
     return (int8_t)ip[0];
 }
@@ -111,6 +207,8 @@ VM* vm_new(void) {
     vm->line = 0;
     vm->exit_code = 0;
 
+    vm->debug = 0;
+
     return vm;
 }
 
@@ -151,6 +249,10 @@ Value vm_peek(VM* vm, int distance) {
 }
 
 void vm_push_frame(VM* vm, Bytecode* bytecode, int slot_count) {
+    vm_push_frame_with_ip(vm, bytecode, slot_count, bytecode->code);
+}
+
+void vm_push_frame_with_ip(VM* vm, Bytecode* bytecode, int slot_count, uint8_t* ip_start) {
     if (vm->frame_count >= vm->frame_capacity) {
         int new_capacity = vm->frame_capacity * 2;
         vm->frames = GROW_ARRAY(CallFrame, vm->frames, vm->frame_capacity, new_capacity);
@@ -159,7 +261,7 @@ void vm_push_frame(VM* vm, Bytecode* bytecode, int slot_count) {
 
     CallFrame* frame = &vm->frames[vm->frame_count++];
     frame->bytecode = bytecode;
-    frame->ip = bytecode->code;
+    frame->ip = ip_start;
     frame->slots = ALLOCATE(Value, slot_count);
     frame->slot_count = slot_count;
 
@@ -412,10 +514,6 @@ Value vm_call_function(VM* vm, int function_index, int arg_count) {
     else if (IS_NATIVE(func_val)) {
         vm_runtime_error(vm, "Native function should be called directly");
         return NIL_VAL;
-
-        // NativeFunctionObject* nativeObj = AS_NATIVE(func_val);
-        // Value result = nativeObj->function(0, NULL);
-        // return result;
     }
     else {
         vm_runtime_error(vm, "Not a function at index: %d", function_index);
@@ -442,9 +540,22 @@ static InterpretResult run(VM* vm) {
 
     CallFrame* frame = &vm->frames[vm->frame_count - 1];
     uint8_t* ip = frame->ip;
-    // Bytecode* bc = frame->bytecode;
 
     while (1) {
+        if (vm->debug) {
+            size_t ip_offset = (size_t)(ip - frame->bytecode->code);
+            uint8_t opcode = *ip;
+            fprintf(stderr, "=== IP=%zu (L%04d) OP=%s (0x%02X) ===\n",
+                    ip_offset,
+                    (ip_offset < frame->bytecode->length
+                        ? frame->bytecode->line_numbers[ip_offset]
+                        : -1),
+                    opcode_name(opcode),
+                    opcode);
+            debug_print_stack(vm);
+            debug_print_frame_locals(vm);
+        }
+
         uint8_t instruction = *ip++;
 
         switch (instruction) {
@@ -458,77 +569,97 @@ static InterpretResult run(VM* vm) {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
 
-                if (IS_INT(a) && IS_INT(b)) {
-                    vm_push(vm, INT_VAL(AS_INT(a) + AS_INT(b)));
-                } else if ((IS_INT(a) || IS_FLOAT(a)) && (IS_INT(b) || IS_FLOAT(b))) {
-                    double da = IS_INT(a) ? (double)AS_INT(a) : AS_FLOAT(a);
-                    double db = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
-                    vm_push(vm, FLOAT_VAL(da + db));
-                } else {
-                    vm_runtime_error(vm, "Operands must be numbers");
-                    return INTERPRET_RUNTIME_ERROR;
+                if ((a.type == VAL_INT || a.type == VAL_FLOAT) &&
+                    (b.type == VAL_INT || b.type == VAL_FLOAT)) {
+
+                    double da = (a.type == VAL_INT) ? (double)a.as.integer : a.as.floating;
+                    double db = (b.type == VAL_INT) ? (double)b.as.integer : b.as.floating;
+
+                    if (a.type == VAL_INT && b.type == VAL_INT) {
+                        vm_push(vm, INT_VAL((int64_t)(da + db)));
+                    } else {
+                        vm_push(vm, FLOAT_VAL(da + db));
+                    }
+                    break;
                 }
-                break;
+
+                vm_runtime_error(vm, "[ADD] Operands must be numbers");
+                return INTERPRET_RUNTIME_ERROR;
             }
 
             case OP_SUB: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
 
-                if (IS_INT(a) && IS_INT(b)) {
-                    vm_push(vm, INT_VAL(AS_INT(a) - AS_INT(b)));
-                } else if ((IS_INT(a) || IS_FLOAT(a)) && (IS_INT(b) || IS_FLOAT(b))) {
-                    double da = IS_INT(a) ? (double)AS_INT(a) : AS_FLOAT(a);
-                    double db = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
-                    vm_push(vm, FLOAT_VAL(da - db));
-                } else {
-                    vm_runtime_error(vm, "Operands must be numbers");
-                    return INTERPRET_RUNTIME_ERROR;
+                if (vm->debug) {
+                    fprintf(stderr, "[DEBUG SUB] a = ");
+                    debug_print_value(a);
+                    fprintf(stderr, " (type=%d), b = ", a.type);
+                    debug_print_value(b);
+                    fprintf(stderr, " (type=%d)\n", b.type);
                 }
-                break;
+
+                if ((a.type == VAL_INT || a.type == VAL_FLOAT) &&
+                    (b.type == VAL_INT || b.type == VAL_FLOAT)) {
+
+                    double da = (a.type == VAL_INT) ? (double)a.as.integer : a.as.floating;
+                    double db = (b.type == VAL_INT) ? (double)b.as.integer : b.as.floating;
+
+                    if (a.type == VAL_INT && b.type == VAL_INT) {
+                        vm_push(vm, INT_VAL((int64_t)(da - db)));
+                    } else {
+                        vm_push(vm, FLOAT_VAL(da - db));
+                    }
+                    break;
+                }
+
+                vm_runtime_error(vm, "[SUB] Operands must be numbers");
+                return INTERPRET_RUNTIME_ERROR;
             }
 
             case OP_MUL: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
 
-                if (IS_INT(a) && IS_INT(b)) {
-                    vm_push(vm, INT_VAL(AS_INT(a) * AS_INT(b)));
-                } else if ((IS_INT(a) || IS_FLOAT(a)) && (IS_INT(b) || IS_FLOAT(b))) {
-                    double da = IS_INT(a) ? (double)AS_INT(a) : AS_FLOAT(a);
-                    double db = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
-                    vm_push(vm, FLOAT_VAL(da * db));
-                } else {
-                    vm_runtime_error(vm, "Operands must be numbers");
-                    return INTERPRET_RUNTIME_ERROR;
+                if ((a.type == VAL_INT || a.type == VAL_FLOAT) &&
+                    (b.type == VAL_INT || b.type == VAL_FLOAT)) {
+
+                    double da = (a.type == VAL_INT) ? (double)a.as.integer : a.as.floating;
+                    double db = (b.type == VAL_INT) ? (double)b.as.integer : b.as.floating;
+
+                    if (a.type == VAL_INT && b.type == VAL_INT) {
+                        vm_push(vm, INT_VAL((int64_t)(da * db)));
+                    } else {
+                        vm_push(vm, FLOAT_VAL(da * db));
+                    }
+                    break;
                 }
-                break;
+
+                vm_runtime_error(vm, "[MUL] Operands must be numbers");
+                return INTERPRET_RUNTIME_ERROR;
             }
 
             case OP_DIV: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
 
-                if (IS_INT(b) && AS_INT(b) == 0) {
-                    vm_runtime_error(vm, "Division by zero");
-                    return INTERPRET_RUNTIME_ERROR;
-                }
-                if (IS_FLOAT(b) && fabs(AS_FLOAT(b)) < 1e-12) {
-                    vm_runtime_error(vm, "Division by zero");
-                    return INTERPRET_RUNTIME_ERROR;
+                if ((a.type == VAL_INT || a.type == VAL_FLOAT) &&
+                    (b.type == VAL_INT || b.type == VAL_FLOAT)) {
+
+                    double da = (a.type == VAL_INT) ? (double)a.as.integer : a.as.floating;
+                    double db = (b.type == VAL_INT) ? (double)b.as.integer : b.as.floating;
+
+                    if (db == 0.0) {
+                        vm_runtime_error(vm, "[DIV] Division by zero");
+                        return INTERPRET_RUNTIME_ERROR;
+                    }
+
+                    vm_push(vm, FLOAT_VAL(da / db));
+                    break;
                 }
 
-                if (IS_INT(a) && IS_INT(b)) {
-                    vm_push(vm, INT_VAL(AS_INT(a) / AS_INT(b)));
-                } else if ((IS_INT(a) || IS_FLOAT(a)) && (IS_INT(b) || IS_FLOAT(b))) {
-                    double da = IS_INT(a) ? (double)AS_INT(a) : AS_FLOAT(a);
-                    double db = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
-                    vm_push(vm, FLOAT_VAL(da / db));
-                } else {
-                    vm_runtime_error(vm, "Operands must be numbers");
-                    return INTERPRET_RUNTIME_ERROR;
-                }
-                break;
+                vm_runtime_error(vm, "[DIV] Operands must be numbers");
+                return INTERPRET_RUNTIME_ERROR;
             }
 
             case OP_MOD: {
@@ -586,6 +717,14 @@ static InterpretResult run(VM* vm) {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
 
+                fprintf(stderr, "[DEBUG][LT] a = ");
+                debug_print_value(a);
+                fprintf(stderr, " (type=%s), b = ",
+                        vm_value_type_name(a));
+                debug_print_value(b);
+                fprintf(stderr, " (type=%s)\n",
+                        vm_value_type_name(b));
+
                 if (IS_INT(a) && IS_INT(b)) {
                     vm_push(vm, BOOL_VAL(AS_INT(a) < AS_INT(b)));
                 } else if ((IS_INT(a) || IS_FLOAT(a)) && (IS_INT(b) || IS_FLOAT(b))) {
@@ -593,7 +732,7 @@ static InterpretResult run(VM* vm) {
                     double db = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
                     vm_push(vm, BOOL_VAL(da < db));
                 } else {
-                    vm_runtime_error(vm, "Operands must be numbers");
+                    vm_runtime_error(vm, "[LT] Operands must be numbers");
                     return INTERPRET_RUNTIME_ERROR;
                 }
                 break;
@@ -610,7 +749,7 @@ static InterpretResult run(VM* vm) {
                     double db = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
                     vm_push(vm, BOOL_VAL(da <= db));
                 } else {
-                    vm_runtime_error(vm, "Operands must be numbers");
+                    vm_runtime_error(vm, "[LE] Operands must be numbers");
                     return INTERPRET_RUNTIME_ERROR;
                 }
                 break;
@@ -627,7 +766,7 @@ static InterpretResult run(VM* vm) {
                     double db = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
                     vm_push(vm, BOOL_VAL(da > db));
                 } else {
-                    vm_runtime_error(vm, "Operands must be numbers");
+                    vm_runtime_error(vm, "[GT] Operands must be numbers");
                     return INTERPRET_RUNTIME_ERROR;
                 }
                 break;
@@ -644,7 +783,7 @@ static InterpretResult run(VM* vm) {
                     double db = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
                     vm_push(vm, BOOL_VAL(da >= db));
                 } else {
-                    vm_runtime_error(vm, "Operands must be numbers");
+                    vm_runtime_error(vm, "[GE] Operands must be numbers");
                     return INTERPRET_RUNTIME_ERROR;
                 }
                 break;
@@ -672,17 +811,14 @@ static InterpretResult run(VM* vm) {
             }
 
             case OP_PUSH_NIL:
-                ip += 1;
                 vm_push(vm, NIL_VAL);
                 break;
 
             case OP_PUSH_TRUE:
-                ip += 1;
                 vm_push(vm, BOOL_VAL(1));
                 break;
 
             case OP_PUSH_FALSE:
-                ip += 1;
                 vm_push(vm, BOOL_VAL(0));
                 break;
 
@@ -703,34 +839,36 @@ static InterpretResult run(VM* vm) {
             }
 
             case OP_JUMP_8: {
-                int offset = read_i8(ip);
-                ip += 1;
-                ip += offset;
+                uint8_t* jump_addr = ip;
+                int16_t offset = read_i16(ip);
+                ip += 2;
+                ip = jump_addr + offset;
                 break;
             }
 
             case OP_JUMP_IF_TRUE_8: {
-                int offset = read_i8(ip);
-                ip += 1;
+                uint8_t* jump_addr = ip;
+                int16_t offset = read_i16(ip);
+                ip += 2;
                 Value condition = vm_pop(vm);
                 if (value_to_bool(condition)) {
-                    ip += offset;
+                    ip = jump_addr + offset;
                 }
                 break;
             }
 
             case OP_JUMP_IF_FALSE_8: {
-                int offset = read_i8(ip);
-                ip += 1;
+                uint8_t* jump_addr = ip;
+                int16_t offset = read_i16(ip);
+                ip += 2;
                 Value condition = vm_pop(vm);
                 if (!value_to_bool(condition)) {
-                    ip += offset;
+                    ip = jump_addr + offset;
                 }
                 break;
             }
 
             case OP_POP:
-                ip += 1;
                 vm_pop(vm);
                 break;
 
@@ -758,28 +896,31 @@ static InterpretResult run(VM* vm) {
             }
 
             case OP_JUMP_16: {
+                uint8_t* jump_addr = ip;
                 int16_t offset = read_i16(ip);
                 ip += 2;
-                ip += offset;
+                ip = jump_addr + offset;
                 break;
             }
 
             case OP_JUMP_IF_TRUE_16: {
+                uint8_t* jump_addr = ip;
                 int16_t offset = read_i16(ip);
                 ip += 2;
                 Value condition = vm_pop(vm);
                 if (value_to_bool(condition)) {
-                    ip += offset;
+                    ip = jump_addr + offset;
                 }
                 break;
             }
 
             case OP_JUMP_IF_FALSE_16: {
+                uint8_t* jump_addr = ip;
                 int16_t offset = read_i16(ip);
                 ip += 2;
                 Value condition = vm_pop(vm);
                 if (!value_to_bool(condition)) {
-                    ip += offset;
+                    ip = jump_addr + offset;
                 }
                 break;
             }
@@ -787,7 +928,18 @@ static InterpretResult run(VM* vm) {
             case OP_CALL_8: {
                 int arg_count = *ip++;
 
-                Value callee = vm_pop(vm);
+                if (vm->debug) {
+                    fprintf(stderr, "  [CALL_8] arg_count = %d\n", arg_count);
+                    debug_print_stack(vm);
+                }
+
+                Value callee = vm_peek(vm, arg_count);
+
+                if (vm->debug) {
+                    fprintf(stderr, "  [CALL_8] callee = ");
+                    debug_print_value(callee);
+                    fprintf(stderr, ", type=%s\n", vm_value_type_name(callee));
+                }
 
                 if (IS_NATIVE(callee)) {
                     NativeFunctionObject* nativeObj = AS_NATIVE(callee);
@@ -801,20 +953,42 @@ static InterpretResult run(VM* vm) {
                         }
                     }
 
-                    Value result = native(arg_count, args);
+                    vm_pop(vm);
 
-                    if (args) {
-                        FREE_ARRAY(Value, args, arg_count);
+                    Value result = native(arg_count, args);
+                    if (args) FREE_ARRAY(Value, args, arg_count);
+
+                    vm_push(vm, result);
+                } else if (IS_INT(callee)) {
+                    int func_index = AS_INT(callee);
+                    Bytecode* bc = frame->bytecode;
+
+                    if (func_index < 0 || func_index >= bc->functions.count) {
+                        vm_runtime_error(vm, "Invalid function index: %d", func_index);
+                        return INTERPRET_RUNTIME_ERROR;
                     }
 
-                    vm_push(vm, result);
-                }
-                else if (IS_FUNCTION(callee)) {
-                    int function_index = AS_INT(callee);
-                    Value result = vm_call_function(vm, function_index, arg_count);
-                    vm_push(vm, result);
-                }
-                else {
+                    size_t address = bc->functions.addresses[func_index];
+                    int locals = bc->functions.local_counts[func_index];
+
+                    frame->ip = ip;
+
+                    vm_push_frame(vm, bc, locals);
+                    CallFrame* new_frame = &vm->frames[vm->frame_count - 1];
+
+                    for (int i = 0; i < arg_count && i < locals; i++) {
+                        Value arg = vm_peek(vm, arg_count - 1 - i);
+                        new_frame->slots[i] = arg;
+                    }
+
+                    for (int i = 0; i < arg_count + 1; i++) {
+                        vm_pop(vm);
+                    }
+
+                    new_frame->ip = bc->code + address;
+                    frame = new_frame;
+                    ip = frame->ip;
+                } else {
                     vm_runtime_error(vm, "Can only call functions, got %s",
                                      vm_value_type_name(callee));
                     return INTERPRET_RUNTIME_ERROR;
@@ -837,9 +1011,10 @@ static InterpretResult run(VM* vm) {
             }
 
             case OP_JUMP_32: {
+                uint8_t* jump_addr = ip;
                 int32_t offset = read_i32(ip);
                 ip += 4;
-                ip += offset;
+                ip = jump_addr + offset;
                 break;
             }
 
@@ -847,7 +1022,18 @@ static InterpretResult run(VM* vm) {
                 int arg_count = read_i16(ip);
                 ip += 2;
 
-                Value callee = vm_pop(vm);
+                if (vm->debug) {
+                    fprintf(stderr, "  [CALL_16] arg_count = %d\n", arg_count);
+                    debug_print_stack(vm);
+                }
+
+                Value callee = vm_peek(vm, arg_count);
+
+                if (vm->debug) {
+                    fprintf(stderr, "  [CALL_16] callee = ");
+                    debug_print_value(callee);
+                    fprintf(stderr, ", type=%s\n", vm_value_type_name(callee));
+                }
 
                 if (IS_NATIVE(callee)) {
                     NativeFunctionObject* nativeObj = AS_NATIVE(callee);
@@ -861,20 +1047,42 @@ static InterpretResult run(VM* vm) {
                         }
                     }
 
-                    Value result = native(arg_count, args);
+                    vm_pop(vm);
 
-                    if (args) {
-                        FREE_ARRAY(Value, args, arg_count);
+                    Value result = native(arg_count, args);
+                    if (args) FREE_ARRAY(Value, args, arg_count);
+
+                    vm_push(vm, result);
+                } else if (IS_INT(callee)) {
+                    int func_index = AS_INT(callee);
+                    Bytecode* bc = frame->bytecode;
+
+                    if (func_index < 0 || func_index >= bc->functions.count) {
+                        vm_runtime_error(vm, "Invalid function index: %d", func_index);
+                        return INTERPRET_RUNTIME_ERROR;
                     }
 
-                    vm_push(vm, result);
-                }
-                else if (IS_FUNCTION(callee)) {
-                    int function_index = AS_INT(callee);
-                    Value result = vm_call_function(vm, function_index, arg_count);
-                    vm_push(vm, result);
-                }
-                else {
+                    size_t address = bc->functions.addresses[func_index];
+                    int locals = bc->functions.local_counts[func_index];
+
+                    frame->ip = ip;
+
+                    vm_push_frame(vm, bc, locals);
+                    CallFrame* new_frame = &vm->frames[vm->frame_count - 1];
+
+                    for (int i = 0; i < arg_count && i < locals; i++) {
+                        Value arg = vm_peek(vm, arg_count - 1 - i);
+                        new_frame->slots[i] = arg;
+                    }
+
+                    for (int i = 0; i < arg_count + 1; i++) {
+                        vm_pop(vm);
+                    }
+
+                    new_frame->ip = bc->code + address;
+                    frame = new_frame;
+                    ip = frame->ip;
+                } else {
                     vm_runtime_error(vm, "Can only call functions, got %s",
                                      vm_value_type_name(callee));
                     return INTERPRET_RUNTIME_ERROR;
@@ -885,11 +1093,40 @@ static InterpretResult run(VM* vm) {
             case OP_LOAD_CONST: {
                 int const_index = read_i32(ip);
                 ip += 4;
-                if (const_index < 0 || const_index >= vm->constants.count) {
+
+                Bytecode* bc = frame->bytecode;
+
+                if (const_index < 0 || (size_t)const_index >= bc->const_count) {
                     vm_runtime_error(vm, "Invalid constant index: %d", const_index);
                     return INTERPRET_RUNTIME_ERROR;
                 }
-                vm_push(vm, vm->constants.values[const_index]);
+
+                Constant c = bc->constants[const_index];
+
+                Value v;
+                switch (c.type) {
+                    case CONST_INT:
+                        v = INT_VAL(c.int_val);
+                        break;
+                    case CONST_FLOAT:
+                        v = FLOAT_VAL((float)c.float_val);
+                        break;
+                    case CONST_STRING: {
+                        int len = (int)strlen(c.str_val);
+                        StringObject* s = vm_copy_string(vm, c.str_val, len);
+                        v = OBJECT_VAL(s);
+                        break;
+                    }
+                    case CONST_FUNCTION:
+                    case CONST_NATIVE_FN:
+                        v = NIL_VAL;
+                        break;
+                    default:
+                        v = NIL_VAL;
+                        break;
+                }
+
+                vm_push(vm, v);
                 break;
             }
 
@@ -903,11 +1140,18 @@ static InterpretResult run(VM* vm) {
             }
 
             case OP_ARRAY_NEW: {
-                int size = AS_INT(vm_pop(vm));
-                ArrayObject* array = vm_new_array(vm, size);
+                uint8_t count = *ip++;
+
+                ArrayObject* array = vm_new_array(vm, count);
+                for (int i = count - 1; i >= 0; i--) {
+                    array->items[i] = vm_pop(vm);
+                    array->count++;
+                }
+
                 vm_push(vm, OBJECT_VAL(array));
                 break;
             }
+
 
             case OP_ARRAY_GET: {
                 int index = AS_INT(vm_pop(vm));
@@ -980,6 +1224,11 @@ static InterpretResult run(VM* vm) {
 
             case OP_RETURN: {
                 Value result = vm_pop(vm);
+                if (vm->debug) {
+                    fprintf(stderr, "  [RETURN] result = ");
+                    debug_print_value(result);
+                    fprintf(stderr, "\n");
+                }
                 vm_pop_frame(vm);
                 if (vm->frame_count == 0) {
                     vm_push(vm, result);
@@ -988,6 +1237,12 @@ static InterpretResult run(VM* vm) {
                 vm_push(vm, result);
                 frame = &vm->frames[vm->frame_count - 1];
                 ip = frame->ip;
+                if (vm->debug) {
+                    size_t ip_off = (size_t)(ip - frame->bytecode->code);
+                    fprintf(stderr, "  [RETURN] resume in FRAME #%d at IP=%zu (%s)\n",
+                            vm->frame_count - 1, ip_off,
+                            opcode_name(*ip));
+                }
                 break;
             }
 
@@ -1027,15 +1282,25 @@ static InterpretResult run(VM* vm) {
 }
 
 InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
-    vm_push_frame(vm, bytecode, 0);
+
+    if (vm->debug) {
+        fprintf(stderr, "=== VM RUN DEBUG START ===\n");
+        bc_debug_dump_header(bytecode);
+
+        bc_disassemble(bytecode);
+
+        fprintf(stderr, "=== END BYTECODE DUMP ===\n");
+    }
+
+    vm_push_frame_with_ip(vm, bytecode,
+                          bytecode->main_locals,
+                          bytecode->code + bytecode->main_entry);
     return run(vm);
 }
 
 InterpretResult vm_interpret(VM* vm, const char* source) {
     (void)vm;
     (void)source;
-    // Bytecode* bc = bytecode_new();
-
     return INTERPRET_COMPILE_ERROR;
 }
 
@@ -1053,3 +1318,8 @@ NativeFunctionObject* vm_new_native_function(VM* vm, const char* name, NativeFn 
 
     return native;
 }
+
+void vm_set_debug(VM* vm, int debug) {
+    vm->debug = debug;
+}
+
