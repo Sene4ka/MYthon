@@ -38,6 +38,7 @@ fn test_quicksort() {
         print("Тест сортировки массива из", size, "элементов...");
 
         arr = generate_array(size)
+
         start = time()
         quicksort(arr, 0, size - 1)
         end = time()

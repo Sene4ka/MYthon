@@ -133,7 +133,9 @@ typedef struct {
     int error_count;
     const char* error_message;
     int line;
-    
+
+    int debug;
+
     int exit_code;
 } VM;
 
@@ -154,6 +156,7 @@ Value vm_pop(VM* vm);
 Value vm_peek(VM* vm, int distance);
 
 void vm_push_frame(VM* vm, Bytecode* bytecode, int slot_count);
+void vm_push_frame_with_ip(VM* vm, Bytecode* bytecode, int slot_count, uint8_t* ip_start);
 void vm_pop_frame(VM* vm);
 
 void vm_store_global(VM* vm, int index, Value value);
@@ -177,5 +180,7 @@ void vm_print_value(Value value);
 const char* vm_value_type_name(Value value);
 
 NativeFunctionObject* vm_new_native_function(VM* vm, const char* name, NativeFn function, int arity);
+
+void vm_set_debug(VM* vm, int debug);
 
 #endif

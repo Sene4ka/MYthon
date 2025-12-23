@@ -501,6 +501,11 @@ void ast_print(const ASTNode* node, int indent) {
             ast_print(node->member.object, indent + 1);
             break;
 
+        case NODE_GROUP_EXPR:
+            printf("Group at %d:%d\n", node->line, node->column);
+            ast_print(node->unary.operand, indent + 1);
+            break;
+
         case NODE_EXPR_STMT:
             printf("ExprStmt at %d:%d\n", node->line, node->column);
             ast_print(node->expr_stmt.expression, indent + 1);
@@ -597,6 +602,7 @@ const char* node_type_to_string(NodeType type) {
         case NODE_INDEX_EXPR: return "IndexExpr";
         case NODE_LOGICAL_EXPR: return "LogicalExpr";
         case NODE_MEMBER_EXPR: return "MemberExpr";
+        case NODE_GROUP_EXPR: return "GroupExpr";
         case NODE_EXPR_STMT: return "ExprStmt";
         case NODE_BLOCK_STMT: return "BlockStmt";
         case NODE_IF_STMT: return "IfStmt";

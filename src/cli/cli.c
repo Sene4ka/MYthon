@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "native.h"
 #include "repl.h"
 
 CLIArgs parse_args(int argc, char** argv) {
@@ -121,6 +122,8 @@ static Bytecode* compile_source(const char* source, const char* filename, int op
         return NULL;
     }
 
+    //ast_print(ast, 0);
+
     Bytecode* bc = bytecode_new();
     Compiler compiler;
     compiler_init(&compiler, filename);
@@ -172,6 +175,10 @@ int run_file(CLIArgs args) {
     }
 
     VM* vm = vm_new();
+    native_register_all(vm);
+
+    if (args.debug) vm_set_debug(vm, 1);
+
     InterpretResult result = vm_run(vm, bc);
 
     if (result == INTERPRET_COMPILE_ERROR) {
@@ -205,7 +212,7 @@ int compile_file(CLIArgs args) {
         bc_disassemble(bc);
     }
 
-    const char* output = args.output_file ? args.output_file : "output.mbc";
+    const char* output = args.output_file ? args.output_file : "output.cmth";
     int success = bc_save_to_file(bc, output);
 
     if (success) {
@@ -251,6 +258,9 @@ int exec_bytecode_file(CLIArgs args) {
     }
 
     VM* vm = vm_new();
+    native_register_all(vm);
+
+    if (args.debug) vm_set_debug(vm, 1);
     InterpretResult result = vm_run(vm, bc);
 
     if (result == INTERPRET_RUNTIME_ERROR) {

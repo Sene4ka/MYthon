@@ -10,6 +10,10 @@
 static void init_locals(Compiler* compiler) {
     compiler->locals.names = ALLOCATE(char*, INITIAL_LOCALS_CAPACITY);
     compiler->locals.depths = ALLOCATE(int, INITIAL_LOCALS_CAPACITY);
+    for (int i = 0; i < INITIAL_LOCALS_CAPACITY; i++) {
+        compiler->locals.names[i] = NULL;
+        compiler->locals.depths[i] = -1;
+    }
     compiler->locals.count = 0;
     compiler->locals.capacity = INITIAL_LOCALS_CAPACITY;
 }
@@ -60,6 +64,8 @@ void compiler_init(Compiler* compiler, const char* source_file) {
     compiler->loop.continue_jumps = NULL;
     compiler->loop.continue_count = 0;
     compiler->loop.continue_capacity = 0;
+
+    compiler->locals_at_toplevel = 0;
 
     init_locals(compiler);
 }
@@ -148,14 +154,27 @@ CompileResult compile_program(Compiler* compiler, const ASTNode* node, Bytecode*
     ASTNode* stmt = node->program.statements;
     CompileResult result = COMPILE_SUCCESS;
 
-    while (stmt && result == COMPILE_SUCCESS) {
-        result = compile_node(compiler, stmt, bytecode);
-        stmt = stmt->next;
+    for (ASTNode* s = stmt; s && result == COMPILE_SUCCESS; s = s->next) {
+        if (s->type == NODE_FUNCTION_STMT) {
+            result = compile_function(compiler, s, bytecode);
+        }
+    }
+    if (result != COMPILE_SUCCESS) return result;
+
+    bytecode->main_entry = bc_get_current_address(bytecode);
+
+    for (ASTNode* s = stmt; s && result == COMPILE_SUCCESS; s = s->next) {
+        if (s->type != NODE_FUNCTION_STMT) {
+            result = compile_node(compiler, s, bytecode);
+        }
     }
 
+    bytecode->main_locals = compiler->locals_at_toplevel;
     emit_op(compiler, bytecode, OP_HALT);
+
     return result;
 }
+
 
 CompileResult compile_block(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     int start_count = compiler->locals.count;
@@ -300,22 +319,56 @@ CompileResult compile_literal(Compiler* compiler, const ASTNode* node, Bytecode*
 }
 
 CompileResult compile_variable(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
-    int index = compiler_resolve_local(compiler, node->variable.name, node->variable.name_length);
-    if (index < 0) {
-        compiler_error_at_line(compiler, node->line, "Unknown variable");
-        return COMPILE_ERROR;
+    const char* name = node->variable.name;
+    int length = node->variable.name_length;
+
+    int index = compiler_resolve_local(compiler, name, length);
+    if (index >= 0) {
+        if (index <= 255) {
+            emit_op(compiler, bytecode, OP_LOAD_LOCAL_8);
+            emit_u8(compiler, bytecode, (uint8_t)index);
+        } else {
+            emit_op(compiler, bytecode, OP_LOAD_LOCAL_16);
+            emit_u16(compiler, bytecode, (uint16_t)index);
+        }
+        return COMPILE_SUCCESS;
     }
 
-    if (index <= 255) {
-        emit_op(compiler, bytecode, OP_LOAD_LOCAL_8);
-        emit_u8(compiler, bytecode, (uint8_t)index);
-    } else {
-        emit_op(compiler, bytecode, OP_LOAD_LOCAL_16);
-        emit_u16(compiler, bytecode, (uint16_t)index);
+    NativeInfo* native_info = native_get_info(name);
+    if (native_info != NULL) {
+        int global_index = native_get_global_index(name);
+        if (global_index < 0) {
+            char buffer[256];
+            snprintf(buffer, sizeof(buffer), "Native function '%s' not registered", name);
+            compiler_error_at_line(compiler, node->line, buffer);
+            return COMPILE_ERROR;
+        }
+
+        emit_op(compiler, bytecode, OP_LOAD_GLOBAL);
+        emit_u16(compiler, bytecode, (uint16_t)global_index);
+        return COMPILE_SUCCESS;
     }
 
-    return COMPILE_SUCCESS;
+    for (int i = 0; i < bytecode->functions.count; i++) {
+        if (strcmp(bytecode->functions.names[i], name) == 0) {
+            if (i >= -128 && i <= 127) {
+                emit_op(compiler, bytecode, OP_PUSH_I8);
+                emit_i8(compiler, bytecode, (int8_t)i);
+            } else if (i >= -32768 && i <= 32767) {
+                emit_op(compiler, bytecode, OP_PUSH_I16);
+                emit_i16(compiler, bytecode, (int16_t)i);
+            } else {
+                emit_op(compiler, bytecode, OP_PUSH_I32);
+                emit_i32(compiler, bytecode, (int32_t)i);
+            }
+            return COMPILE_SUCCESS;
+        }
+    }
+
+    compiler_error_at_line(compiler, node->line, "Unknown variable or function");
+    return COMPILE_ERROR;
 }
+
 
 CompileResult compile_assign(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     CompileResult result = compile_expression(compiler, node->assign.value, bytecode);
@@ -342,10 +395,15 @@ CompileResult compile_assign(Compiler* compiler, const ASTNode* node, Bytecode* 
             emit_u16(compiler, bytecode, (uint16_t)index);
         }
     } else if (node->assign.target->type == NODE_INDEX_EXPR) {
-        result = compile_expression(compiler, node->assign.target->index.array, bytecode);
+        result = compile_expression(compiler,
+            node->assign.target->index.array, bytecode);
         if (result != COMPILE_SUCCESS) return result;
 
-        result = compile_expression(compiler, node->assign.target->index.index, bytecode);
+        result = compile_expression(compiler,
+            node->assign.target->index.index, bytecode);
+        if (result != COMPILE_SUCCESS) return result;
+
+        result = compile_expression(compiler, node->assign.value, bytecode);
         if (result != COMPILE_SUCCESS) return result;
 
         emit_op(compiler, bytecode, OP_ARRAY_SET);
@@ -389,13 +447,6 @@ CompileResult compile_call(Compiler* compiler, const ASTNode* node, Bytecode* by
                 return COMPILE_SUCCESS;
             }
 
-            for (size_t i = 0; i < node->call.arg_count; i++) {
-                CompileResult result = compile_expression(compiler,
-                                                          node->call.arguments[i],
-                                                          bytecode);
-                if (result != COMPILE_SUCCESS) return result;
-            }
-
             int global_index = native_get_global_index(name);
             if (global_index < 0) {
                 char buffer[256];
@@ -406,6 +457,13 @@ CompileResult compile_call(Compiler* compiler, const ASTNode* node, Bytecode* by
 
             emit_op(compiler, bytecode, OP_LOAD_GLOBAL);
             emit_u16(compiler, bytecode, (uint16_t)global_index);
+
+            for (size_t i = 0; i < node->call.arg_count; i++) {
+                CompileResult result = compile_expression(compiler,
+                                                          node->call.arguments[i],
+                                                          bytecode);
+                if (result != COMPILE_SUCCESS) return result;
+            }
 
             if (node->call.arg_count <= 255) {
                 emit_op(compiler, bytecode, OP_CALL_8);
@@ -423,16 +481,6 @@ CompileResult compile_call(Compiler* compiler, const ASTNode* node, Bytecode* by
         const char* method_name = node->call.callee->member.name;
 
         if (strcmp(method_name, "push") == 0) {
-            CompileResult result = compile_expression(compiler,
-                                                      node->call.callee->member.object,
-                                                      bytecode);
-            if (result != COMPILE_SUCCESS) return result;
-
-            for (size_t i = 0; i < node->call.arg_count; i++) {
-                result = compile_expression(compiler, node->call.arguments[i], bytecode);
-                if (result != COMPILE_SUCCESS) return result;
-            }
-
             int global_index = native_get_global_index("push");
             if (global_index < 0) {
                 compiler_error_at_line(compiler, node->line,
@@ -442,6 +490,16 @@ CompileResult compile_call(Compiler* compiler, const ASTNode* node, Bytecode* by
 
             emit_op(compiler, bytecode, OP_LOAD_GLOBAL);
             emit_u16(compiler, bytecode, (uint16_t)global_index);
+
+            CompileResult result = compile_expression(compiler,
+                                                      node->call.callee->member.object,
+                                                      bytecode);
+            if (result != COMPILE_SUCCESS) return result;
+
+            for (size_t i = 0; i < node->call.arg_count; i++) {
+                result = compile_expression(compiler, node->call.arguments[i], bytecode);
+                if (result != COMPILE_SUCCESS) return result;
+            }
 
             if (node->call.arg_count + 1 <= 255) {
                 emit_op(compiler, bytecode, OP_CALL_8);
@@ -557,6 +615,7 @@ CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* byt
     compiler_begin_loop(compiler);
     int start_count = compiler->locals.count;
     compiler_begin_scope(compiler);
+
     int saved_break_count = compiler->loop.break_count;
     int saved_continue_count = compiler->loop.continue_count;
 
@@ -567,28 +626,23 @@ CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* byt
 
     size_t loop_start = bc_get_current_address(bytecode);
 
-    size_t exit_jump;
-    //int has_exit_jump = 0;
-
     if (node->for_stmt.condition) {
         CompileResult result = compile_expression(compiler, node->for_stmt.condition, bytecode);
         if (result != COMPILE_SUCCESS) return result;
 
+        size_t exit_jump;
         emit_jump(compiler, bytecode, OP_JUMP_IF_FALSE_8, &exit_jump);
-        //has_exit_jump = 1;
 
         if (compiler->loop.break_count >= compiler->loop.break_capacity) {
             compiler->loop.break_capacity *= 2;
             compiler->loop.break_jumps = GROW_ARRAY(
-                    size_t,
-                    compiler->loop.break_jumps,
-                    compiler->loop.break_count,
-                    compiler->loop.break_capacity
+                size_t,
+                compiler->loop.break_jumps,
+                compiler->loop.break_count,
+                compiler->loop.break_capacity
             );
         }
-
         compiler->loop.break_jumps[compiler->loop.break_count++] = exit_jump;
-
     }
 
     CompileResult result = compile_statement(compiler, node->for_stmt.body, bytecode);
@@ -597,53 +651,48 @@ CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* byt
     size_t continue_start = bc_get_current_address(bytecode);
 
     if (node->for_stmt.increment) {
-        result = compile_expression(compiler, node->for_stmt.increment, bytecode);
+        result = compile_statement(compiler, node->for_stmt.increment, bytecode);
         if (result != COMPILE_SUCCESS) return result;
-        emit_op(compiler, bytecode, OP_POP);
     }
 
     emit_loop(compiler, bytecode, loop_start);
 
-    for (int i = 0; i < compiler->loop.continue_count; i++) {
-        compiler_patch_continues(compiler, bytecode, continue_start);
-    }
+    compiler_patch_continues(compiler, bytecode, continue_start);
     compiler->loop.continue_count = saved_continue_count;
 
     size_t current_end = bc_get_current_address(bytecode);
-    for (int i = 0; i < compiler->loop.break_count; i++) {
-        bc_patch_i16(bytecode, compiler->loop.break_jumps[i], (int16_t)(current_end - compiler->loop.break_jumps[i] - 2));
-    }
-    compiler->loop.break_count = saved_break_count;;
+    compiler_patch_breaks(compiler, bytecode, current_end);
+    compiler->loop.break_count = saved_break_count;
 
     compiler_end_scope(compiler, bytecode, start_count);
     compiler_end_loop(compiler, bytecode);
-
-    // Clean up loop locals
-    // while (compiler->locals.count > start_count) {
-    //     compiler->locals.count--;
-    //     if (compiler->locals.names[compiler->locals.count]) {
-    //         FREE_ARRAY(char, compiler->locals.names[compiler->locals.count],
-    //                    strlen(compiler->locals.names[compiler->locals.count]) + 1);
-    //     }
-    // }
 
     return COMPILE_SUCCESS;
 }
 
 
 CompileResult compile_function(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
-    compiler_begin_function(compiler, node->function_stmt.name);
+    int func_index = bytecode->functions.count;
+    size_t func_address = bc_get_current_address(bytecode);
 
-    //int start_count = compiler->locals.count;
+    bc_add_function(
+        bytecode,
+        node->function_stmt.name ? node->function_stmt.name : "<anonymous>",
+        func_address,
+        0
+    );
+
+    compiler_begin_function(compiler, node->function_stmt.name);
     compiler_begin_scope(compiler);
 
-    if (node->function_stmt.name) {
-        compiler_add_local(compiler, node->function_stmt.name, strlen(node->function_stmt.name));
-    }
+    int locals_start = compiler->locals.count;
 
     for (size_t i = 0; i < node->function_stmt.param_count; i++) {
-        compiler_add_local(compiler, node->function_stmt.parameters[i],
-                           strlen(node->function_stmt.parameters[i]));
+        compiler_add_local(
+            compiler,
+            node->function_stmt.parameters[i],
+            (int)strlen(node->function_stmt.parameters[i])
+        );
     }
 
     CompileResult result = compile_block(compiler, node->function_stmt.body, bytecode);
@@ -656,6 +705,15 @@ CompileResult compile_function(Compiler* compiler, const ASTNode* node, Bytecode
         emit_op(compiler, bytecode, OP_RETURN_NIL);
     }
 
+    int locals = compiler->locals.count - locals_start;
+    if (locals < 0) locals = 0;
+    bytecode->functions.local_counts[func_index] = locals;
+
+    /*printf("Function %s locals=%d\n",
+       bytecode->functions.names[func_index],
+       bytecode->functions.local_counts[func_index]);*/
+
+    compiler_end_scope(compiler, bytecode, locals_start);
     compiler_end_function(compiler);
 
     return COMPILE_SUCCESS;
@@ -739,6 +797,10 @@ int compiler_add_local(Compiler* compiler, const char* name, int length) {
                                             compiler->locals.capacity, new_capacity);
         compiler->locals.depths = GROW_ARRAY(int, compiler->locals.depths,
                                              compiler->locals.capacity, new_capacity);
+        for (int i = compiler->locals.capacity; i < new_capacity; i++) {
+            compiler->locals.names[i] = NULL;
+            compiler->locals.depths[i] = -1;
+        }
         compiler->locals.capacity = new_capacity;
     }
 
@@ -747,7 +809,15 @@ int compiler_add_local(Compiler* compiler, const char* name, int length) {
     compiler->locals.names[compiler->locals.count][length] = '\0';
     compiler->locals.depths[compiler->locals.count] = compiler->scope_depth;
 
-    return compiler->locals.count++;
+    int index = compiler->locals.count++;
+
+    if (compiler->function.function_depth == 0) {
+        if (index + 1 > compiler->locals_at_toplevel) {
+            compiler->locals_at_toplevel = index + 1;
+        }
+    }
+
+    return index;
 }
 
 void compiler_begin_scope(Compiler* compiler) {
@@ -755,13 +825,11 @@ void compiler_begin_scope(Compiler* compiler) {
 }
 
 void compiler_end_scope(Compiler* compiler, Bytecode* bytecode, int start_count) {
+    (void)bytecode;
     compiler->scope_depth--;
 
-    // Pop locals that were added in this scope
     while (compiler->locals.count > start_count) {
-        emit_op(compiler, bytecode, OP_POP);
         compiler->locals.count--;
-
         compiler->locals.depths[compiler->locals.count] = -1;
     }
 }
@@ -779,7 +847,7 @@ void compiler_end_loop(Compiler* compiler, Bytecode* bytecode) {
 void compiler_patch_breaks(Compiler* compiler, Bytecode* bytecode, size_t target) {
     for (int i = 0; i < compiler->loop.break_count; i++) {
         size_t jump_address = compiler->loop.break_jumps[i];
-        int16_t offset = (int16_t)(target - jump_address - 1);
+        int16_t offset = (int16_t)(target - jump_address);
         bc_patch_i16(bytecode, jump_address, offset);
     }
 }
@@ -787,7 +855,7 @@ void compiler_patch_breaks(Compiler* compiler, Bytecode* bytecode, size_t target
 void compiler_patch_continues(Compiler* compiler, Bytecode* bytecode, size_t target) {
     for (int i = 0; i < compiler->loop.continue_count; i++) {
         size_t jump_address = compiler->loop.continue_jumps[i];
-        int16_t offset = (int16_t)(target - jump_address - 1);
+        int16_t offset = (int16_t)(target - jump_address);
         bc_patch_i16(bytecode, jump_address, offset);
     }
 }
@@ -858,14 +926,15 @@ void emit_jump(Compiler* compiler, Bytecode* bytecode, OpCode op, size_t* jump_a
 
 void emit_loop(Compiler* compiler, Bytecode* bytecode, size_t loop_start) {
     emit_op(compiler, bytecode, OP_JUMP_8);
-    int16_t offset = (int16_t)(loop_start - bc_get_current_address(bytecode) - 1);
+    size_t jump_address = bc_get_current_address(bytecode); // адрес первого байта смещения
+    int16_t offset = (int16_t)(loop_start - jump_address);
     emit_i16(compiler, bytecode, offset);
 }
 
 void patch_jump(Compiler* compiler, Bytecode* bytecode, size_t jump_address) {
     (void)compiler;
-    size_t current = bc_get_current_address(bytecode);
-    int16_t offset = (int16_t)(current - jump_address - 2);
+    size_t current = bc_get_current_address(bytecode);      // target_address
+    int16_t offset = (int16_t)(current - jump_address);
     bc_patch_i16(bytecode, jump_address, offset);
 }
 
@@ -970,3 +1039,4 @@ CompileResult compile_ternary(Compiler* compiler, const ASTNode* node, Bytecode*
 
     return COMPILE_SUCCESS;
 }
+
