@@ -1,0 +1,12 @@
+fn test_array() {
+    arr = []
+    for (i = 0; i < 5; i = i + 1) {
+        arr.push(42)
+    }
+
+    for (i = 0; i < 5; i = i + 1) {
+        print(arr[i])
+    }
+}
+
+test_array()

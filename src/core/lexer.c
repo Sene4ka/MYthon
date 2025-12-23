@@ -27,7 +27,6 @@ static const KeywordEntry keywords[] = {
     {"this", TOKEN_THIS},
     {"true", TOKEN_TRUE},
     {"let", TOKEN_LET},
-    {"var", TOKEN_VAR},
     {"while", TOKEN_WHILE},
     {"break", TOKEN_BREAK},
     {NULL, TOKEN_EOF}

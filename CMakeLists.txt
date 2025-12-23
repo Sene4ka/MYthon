@@ -22,8 +22,6 @@ set(SOURCE_FILES
         ${SRC_DIR}/core/compiler.c
         ${SRC_DIR}/cli/repl.c
         ${SRC_DIR}/utils/utils.c
-        # ${SRC_DIR}/core/dfa_lexer.c #
-        # ${SRC_DIR}/core/fast_lexer.c #
 )
 
 set(HEADER_FILES
@@ -39,11 +37,9 @@ set(HEADER_FILES
         ${SRC_DIR}/cli/repl.h
         ${SRC_DIR}/core/debug.h
         ${SRC_DIR}/utils/utils.h
-        # ${SRC_DIR}/core/dfa_lexer.h #
 )
 
 add_executable(mython ${SOURCE_FILES} ${HEADER_FILES})
-add_executable(dfa_generator ${SRC_DIR}/core/dfa_generator.c ${SRC_DIR}/core/dfa_lexer.c ${SRC_DIR}/utils/memory.c) #
 
 source_group("Source" FILES ${SOURCE_FILES})
 source_group("Headers" FILES ${HEADER_FILES})

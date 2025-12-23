@@ -54,7 +54,7 @@ void synchronize(Parser* parser) {
         switch (parser->current.type) {
             case TOKEN_CLASS:
             case TOKEN_FN:
-            case TOKEN_VAR:
+            case TOKEN_LET:
             case TOKEN_FOR:
             case TOKEN_IF:
             case TOKEN_WHILE:
@@ -176,9 +176,6 @@ ASTNode* parse_declaration(Parser* parser) {
     if (parser_match(parser, TOKEN_LET)) {
         return parse_var_declaration(parser);
     }
-    if (parser_match(parser, TOKEN_VAR)) {
-        return parse_var_declaration(parser);
-    }
     if (parser_match(parser, TOKEN_FN)) {
         return parse_function_statement(parser);
     }
@@ -198,9 +195,8 @@ ASTNode* parse_var_declaration(Parser* parser) {
     ASTNode* var_node = ast_new_variable((const char*)name.start, name.length, name.line, name.column);
     if (initializer) {
         return ast_new_assign(var_node, initializer, name.line, name.column);
-    } else {
-        return ast_new_expr_stmt(var_node, name.line, name.column);
     }
+    return ast_new_expr_stmt(var_node, name.line, name.column);
 }
 
 ASTNode* parse_statement(Parser* parser) {
@@ -259,7 +255,7 @@ static ASTNode* parse_for_statement(Parser* parser) {
 
     ASTNode* initializer = NULL;
     if (!parser_match(parser, TOKEN_SEMICOLON)) {
-        if (parser_match(parser, TOKEN_LET) || parser_match(parser, TOKEN_VAR)) {
+        if (parser_match(parser, TOKEN_LET)) {
             initializer = parse_var_declaration_no_semi(parser);
             parser_consume(parser, TOKEN_SEMICOLON, "Ожидается ';' после инициализации for");
         } else {

@@ -706,12 +706,8 @@ CompileResult compile_function(Compiler* compiler, const ASTNode* node, Bytecode
     }
 
     int locals = compiler->locals.count - locals_start;
-    if (locals < 0) locals = 0;
+    //if (locals > 255) locals = 255;
     bytecode->functions.local_counts[func_index] = locals;
-
-    /*printf("Function %s locals=%d\n",
-       bytecode->functions.names[func_index],
-       bytecode->functions.local_counts[func_index]);*/
 
     compiler_end_scope(compiler, bytecode, locals_start);
     compiler_end_function(compiler);

@@ -69,7 +69,6 @@ typedef enum {
     TOKEN_THIS,
     TOKEN_TRUE,
     TOKEN_LET,
-    TOKEN_VAR,
     TOKEN_WHILE,
     TOKEN_BREAK,
 

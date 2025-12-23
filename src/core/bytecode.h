@@ -36,6 +36,7 @@ typedef enum {
     OP_JUMP_IF_FALSE_8 = 0x28,
     OP_POP = 0x29,
 
+    // 2-байтовый операнд (3 байта)
     OP_PUSH_I16 = 0x30,
     OP_STORE_LOCAL_16 = 0x31,
     OP_LOAD_LOCAL_16 = 0x32,
