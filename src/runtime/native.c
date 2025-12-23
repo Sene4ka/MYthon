@@ -16,7 +16,8 @@ static NativeInfo native_functions[] = {
         {"push", -1, 5},
         {"pop", 1, 6},
         {"random", 0, 7},
-        {"toString", 1, -1}, //
+        {"floor", 1, 8},
+        {"toString", 1, -1},
         {"toInt", 1, -1},
         {"toFloat", 1, -1},
         {NULL, 0, -1}
@@ -49,6 +50,7 @@ void native_register_all(VM* vm) {
     vm_store_global(vm, 5, OBJECT_VAL(vm_new_native_function(vm, "push", native_array_push, -1)));
     vm_store_global(vm, 6, OBJECT_VAL(vm_new_native_function(vm, "pop", native_array_pop, 1)));
     vm_store_global(vm, 7, OBJECT_VAL(vm_new_native_function(vm, "random", native_random, 0)));
+    vm_store_global(vm, 8, OBJECT_VAL(vm_new_native_function(vm, "floor", native_floor, 1)));
 }
 
 Value native_print(int arg_count, Value* args) {
@@ -217,3 +219,22 @@ Value native_random(int arg_count, Value* args) {
     if (arg_count != 0) return NIL_VAL;
     return FLOAT_VAL((double)rand() / RAND_MAX);
 }
+
+Value native_floor(int arg_count, Value* args) {
+    if (arg_count != 1) {
+        return NIL_VAL;
+    }
+
+    Value val = args[0];
+
+    if (IS_INT(val)) {
+        return val;
+    }
+
+    if (IS_FLOAT(val)) {
+        return INT_VAL((int64_t)floor(AS_FLOAT(val)));
+    }
+
+    return NIL_VAL;
+}
+

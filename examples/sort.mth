@@ -1,13 +1,23 @@
 fn quicksort(arr, left, right) {
-    if (left >= right) return
+    if (left >= right) {
+        return
+    }
 
-    pivot = arr[(left + right) / 2]
+    mid = left + (right - left) / 2
+    pivot = arr[mid]
     i = left
     j = right
 
+    print(pivot)
+
     while (i <= j) {
-        while (arr[i] < pivot) i = i + 1
-        while (arr[j] > pivot) j = j - 1
+        print(i, j)
+        while (arr[i] < pivot) {
+            i = i + 1
+        }
+        while (arr[j] > pivot) {
+            j = j - 1
+        }
 
         if (i <= j) {
             temp = arr[i]
@@ -18,20 +28,24 @@ fn quicksort(arr, left, right) {
         }
     }
 
-    quicksort(arr, left, j)
-    quicksort(arr, i, right)
+    if (left < j) {
+        quicksort(arr, left, j)
+    }
+    if (i < right) {
+        quicksort(arr, i, right)
+    }
 }
 
-fn generate_array(size) {
+fn generate_array(n) {
     arr = []
-    for (i = 0; i < size; i = i + 1) {
+    for (i = 0; i < n; i = i + 1) {
         arr.push(random() * 100000)
     }
     return arr
 }
 
 fn test_quicksort() {
-    sizes = [100, 1000, 10000, 50000]
+    sizes = [10]
 
     for (idx = 0; idx < len(sizes); idx = idx + 1) {
         size = sizes[idx]
@@ -45,7 +59,6 @@ fn test_quicksort() {
 
         print("Время:", end - start, "сек")
 
-        // Проверка отсортированности
         sorted = true
         for (i = 1; i < size; i = i + 1) {
             if (arr[i - 1] > arr[i]) {

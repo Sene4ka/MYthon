@@ -108,7 +108,8 @@ typedef struct {
 typedef struct {
     Bytecode* bytecode;
     uint8_t* ip;
-    Value* slots;
+    // Value* slots;
+    int slots_offset;
     int slot_count;
 } CallFrame;
 

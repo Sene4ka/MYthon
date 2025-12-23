@@ -122,18 +122,9 @@ static Bytecode* compile_source(const char* source, const char* filename, int op
         return NULL;
     }
 
-    //ast_print(ast, 0);
-
     Bytecode* bc = bytecode_new();
     Compiler compiler;
     compiler_init(&compiler, filename);
-
-    bc_add_constant_string(bc, "print");
-    bc_add_constant_string(bc, "len");
-    bc_add_constant_string(bc, "push");
-    bc_add_constant_string(bc, "pop");
-    bc_add_constant_string(bc, "time");
-    bc_add_constant_string(bc, "random");
 
     CompileResult result = compiler_compile(&compiler, ast, bc);
 

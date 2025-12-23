@@ -309,6 +309,7 @@ void bc_add_function(Bytecode* bc, const char* name, size_t address, int locals)
     bc->functions.names[old_count] = allocate(strlen(name) + 1);
     strcpy(bc->functions.names[old_count], name);
     bc->functions.addresses[old_count] = address;
+    //if (locals < 8) locals = 8;
     bc->functions.local_counts[old_count] = locals;
 }
 

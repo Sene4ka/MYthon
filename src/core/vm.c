@@ -112,7 +112,7 @@ static void debug_print_frame_locals(VM* vm) {
             vm->frame_count - 1, f->slot_count);
     for (int i = 0; i < f->slot_count; i++) {
         if (i > 0) fprintf(stderr, ", ");
-        debug_print_value(f->slots[i]);
+        debug_print_value(vm->stack[f->slots_offset + i]);
     }
     fprintf(stderr, "]\n");
 }
@@ -262,11 +262,11 @@ void vm_push_frame_with_ip(VM* vm, Bytecode* bytecode, int slot_count, uint8_t* 
     CallFrame* frame = &vm->frames[vm->frame_count++];
     frame->bytecode = bytecode;
     frame->ip = ip_start;
-    frame->slots = ALLOCATE(Value, slot_count);
+    frame->slots_offset = vm->sp;
     frame->slot_count = slot_count;
 
     for (int i = 0; i < slot_count; i++) {
-        frame->slots[i] = NIL_VAL;
+        vm_push(vm, NIL_VAL);
     }
 }
 
@@ -277,7 +277,7 @@ void vm_pop_frame(VM* vm) {
     }
 
     CallFrame* frame = &vm->frames[--vm->frame_count];
-    FREE_ARRAY(Value, frame->slots, frame->slot_count);
+    vm->sp = frame->slots_offset;
 }
 
 void vm_store_global(VM* vm, int index, Value value) {
@@ -316,16 +316,16 @@ void vm_store_local(VM* vm, int index, Value value) {
 
     CallFrame* frame = &vm->frames[vm->frame_count - 1];
 
+    Value* slots = vm->stack + frame->slots_offset;
+
     if (index >= frame->slot_count) {
-        int new_slot_count = index + 1;
-        frame->slots = GROW_ARRAY(Value, frame->slots,
-                                  frame->slot_count, new_slot_count);
-
-        for (int i = frame->slot_count; i < new_slot_count; i++) {
-            frame->slots[i] = NIL_VAL;
+        int new_slotcount = index + 1;
+        int slots_to_add = new_slotcount - frame->slot_count;
+        for (int i = 0; i < slots_to_add; i++) {
+            vm_push(vm, NIL_VAL);
         }
-
-        frame->slot_count = new_slot_count;
+        frame->slot_count = new_slotcount;
+        slots = vm->stack + frame->slots_offset;
     }
 
     if (index < 0) {
@@ -333,7 +333,7 @@ void vm_store_local(VM* vm, int index, Value value) {
         return;
     }
 
-    frame->slots[index] = value;
+    slots[index] = value;
 }
 
 Value vm_load_local(VM* vm, int index) {
@@ -348,7 +348,7 @@ Value vm_load_local(VM* vm, int index) {
         return NIL_VAL;
     }
 
-    return frame->slots[index];
+    return vm->stack[frame->slots_offset + index];
 }
 
 static void print_value(Value value) {
@@ -494,7 +494,7 @@ Value vm_call_function(VM* vm, int function_index, int arg_count) {
 
         for (int i = 0; i < arg_count && i < func->arity; i++) {
             Value arg = vm_peek(vm, arg_count - 1 - i);
-            frame->slots[i] = arg;
+            vm->stack[frame->slots_offset + i] = arg;
         }
 
         for (int i = 0; i < arg_count; i++) {
@@ -511,14 +511,12 @@ Value vm_call_function(VM* vm, int function_index, int arg_count) {
         }
         return NIL_VAL;
     }
-    else if (IS_NATIVE(func_val)) {
+    if (IS_NATIVE(func_val)) {
         vm_runtime_error(vm, "Native function should be called directly");
         return NIL_VAL;
     }
-    else {
-        vm_runtime_error(vm, "Not a function at index: %d", function_index);
-        return NIL_VAL;
-    }
+    vm_runtime_error(vm, "Not a function at index: %d", function_index);
+    return NIL_VAL;
 }
 
 Value vm_call_native(VM* vm, NativeFn function, int arg_count) {
@@ -654,7 +652,11 @@ static InterpretResult run(VM* vm) {
                         return INTERPRET_RUNTIME_ERROR;
                     }
 
-                    vm_push(vm, FLOAT_VAL(da / db));
+                    if (a.type == VAL_INT && b.type == VAL_INT) {
+                        vm_push(vm, INT_VAL((int64_t)(da / db)));
+                    } else {
+                        vm_push(vm, FLOAT_VAL(da / db));
+                    }
                     break;
                 }
 
@@ -717,13 +719,11 @@ static InterpretResult run(VM* vm) {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
 
-                fprintf(stderr, "[DEBUG][LT] a = ");
+                fprintf(stderr, "[LT DEBUG @IP=%ld] a = ", (long)(ip - frame->bytecode->code));
                 debug_print_value(a);
-                fprintf(stderr, " (type=%s), b = ",
-                        vm_value_type_name(a));
+                fprintf(stderr, " (type=%s), b = ", vm_value_type_name(a));
                 debug_print_value(b);
-                fprintf(stderr, " (type=%s)\n",
-                        vm_value_type_name(b));
+                fprintf(stderr, " (type=%s)\n", vm_value_type_name(b));
 
                 if (IS_INT(a) && IS_INT(b)) {
                     vm_push(vm, BOOL_VAL(AS_INT(a) < AS_INT(b)));
@@ -825,7 +825,7 @@ static InterpretResult run(VM* vm) {
             case OP_STORE_LOCAL_8: {
                 int index = read_i8(ip);
                 ip += 1;
-                Value val = vm_peek(vm, 0);
+                Value val = vm_pop(vm);
                 vm_store_local(vm, index, val);
                 break;
             }
@@ -882,7 +882,7 @@ static InterpretResult run(VM* vm) {
             case OP_STORE_LOCAL_16: {
                 int index = read_i16(ip);
                 ip += 2;
-                Value val = vm_peek(vm, 0);
+                Value val = vm_pop(vm);
                 vm_store_local(vm, index, val);
                 break;
             }
@@ -959,7 +959,9 @@ static InterpretResult run(VM* vm) {
                     if (args) FREE_ARRAY(Value, args, arg_count);
 
                     vm_push(vm, result);
+                    frame = &vm->frames[vm->frame_count - 1];
                 } else if (IS_INT(callee)) {
+
                     int func_index = AS_INT(callee);
                     Bytecode* bc = frame->bytecode;
 
@@ -971,18 +973,47 @@ static InterpretResult run(VM* vm) {
                     size_t address = bc->functions.addresses[func_index];
                     int locals = bc->functions.local_counts[func_index];
 
-                    frame->ip = ip;
+                    int return_frame_idx = vm->frame_count - 1;
+
+                    Value* saved_args = NULL;
+                    if (arg_count > 0) {
+                        saved_args = ALLOCATE(Value, arg_count);
+                        for (int i = 0; i < arg_count; i++) {
+                            saved_args[i] = vm_peek(vm, arg_count - 1 - i);
+                        }
+                    }
+
+                    fprintf(stderr, "  [CALL_8] func_index = %d, arg_count = %d\n", func_index, arg_count);
+                    for (int i = 0; i < arg_count; i++) {
+                        Value v = saved_args[i];
+                        fprintf(stderr, "    arg[%d] = ", i);
+                        debug_print_value(v);
+                        fprintf(stderr, " (type = %s)\n", vm_value_type_name(v));
+                    }
+
+                    for (int i = 0; i < arg_count + 1; i++) {
+                        vm_pop(vm);
+                    }
+
+                    vm->frames[return_frame_idx].ip = ip;
 
                     vm_push_frame(vm, bc, locals);
                     CallFrame* new_frame = &vm->frames[vm->frame_count - 1];
 
                     for (int i = 0; i < arg_count && i < locals; i++) {
-                        Value arg = vm_peek(vm, arg_count - 1 - i);
-                        new_frame->slots[i] = arg;
+                        vm->stack[new_frame->slots_offset + i] = saved_args[i];
                     }
 
-                    for (int i = 0; i < arg_count + 1; i++) {
-                        vm_pop(vm);
+                    if (saved_args) {
+                        FREE_ARRAY(Value, saved_args, arg_count);
+                    }
+
+                    if (func_index == 0) {
+                        fprintf(stderr, "[QS ENTER] left = ");
+                        debug_print_value(vm->stack[new_frame->slots_offset + 1]);
+                        fprintf(stderr, ", right = ");
+                        debug_print_value(vm->stack[new_frame->slots_offset + 2]);
+                        fprintf(stderr, "\n");
                     }
 
                     new_frame->ip = bc->code + address;
@@ -1053,6 +1084,7 @@ static InterpretResult run(VM* vm) {
                     if (args) FREE_ARRAY(Value, args, arg_count);
 
                     vm_push(vm, result);
+                    frame = &vm->frames[vm->frame_count - 1];
                 } else if (IS_INT(callee)) {
                     int func_index = AS_INT(callee);
                     Bytecode* bc = frame->bytecode;
@@ -1065,18 +1097,31 @@ static InterpretResult run(VM* vm) {
                     size_t address = bc->functions.addresses[func_index];
                     int locals = bc->functions.local_counts[func_index];
 
-                    frame->ip = ip;
+                    int return_frame_idx = vm->frame_count - 1;
+
+                    Value* saved_args = NULL;
+                    if (arg_count > 0) {
+                        saved_args = ALLOCATE(Value, arg_count);
+                        for (int i = 0; i < arg_count; i++) {
+                            saved_args[i] = vm_peek(vm, arg_count - 1 - i);
+                        }
+                    }
+
+                    for (int i = 0; i < arg_count + 1; i++) {
+                        vm_pop(vm);
+                    }
+
+                    vm->frames[return_frame_idx].ip = ip;
 
                     vm_push_frame(vm, bc, locals);
                     CallFrame* new_frame = &vm->frames[vm->frame_count - 1];
 
                     for (int i = 0; i < arg_count && i < locals; i++) {
-                        Value arg = vm_peek(vm, arg_count - 1 - i);
-                        new_frame->slots[i] = arg;
+                        vm->stack[new_frame->slots_offset + i] = saved_args[i];
                     }
 
-                    for (int i = 0; i < arg_count + 1; i++) {
-                        vm_pop(vm);
+                    if (saved_args) {
+                        FREE_ARRAY(Value, saved_args, arg_count);
                     }
 
                     new_frame->ip = bc->code + address;
