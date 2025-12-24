@@ -127,11 +127,9 @@ static Bytecode* compile_source(const char* source, const char* filename, int op
     Bytecode* bc = bytecode_new();
     Compiler compiler;
     compiler_init(&compiler, filename);
+    //compiler.debug = debug;
 
-
-    fprintf(stderr, "DEBUG: start compile %s\n", filename);
     CompileResult result = compiler_compile(&compiler, ast, bc);
-    fprintf(stderr, "DEBUG: end compile, result=%d\n", result);
 
     if (result != COMPILE_SUCCESS) {
         fprintf(stderr, "Compilation failed\n");
@@ -260,6 +258,7 @@ int exec_bytecode_file(CLIArgs args) {
     native_register_all(vm);
 
     if (args.debug) vm_set_debug(vm, 1);
+
     InterpretResult result = vm_run(vm, bc);
 
     if (result == INTERPRET_RUNTIME_ERROR) {

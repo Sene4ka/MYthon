@@ -1,10 +1,23 @@
 #include "compiler.h"
+
+#include <stdarg.h>
+
 #include "memory.h"
 #include "utils.h"
 #include "native.h"
 
 #include <string.h>
 #include <stdio.h>
+
+static void compiler_debug_log(Compiler* c, const char* fmt, ...) {
+    if (!c || !c->debug) return;
+    va_list args;
+    va_start(args, fmt);
+    fprintf(stderr, "[COMPILER] ");
+    vfprintf(stderr, fmt, args);
+    fprintf(stderr, "\n");
+    va_end(args);
+}
 
 /* ===== Вспомогалки по массивам ===== */
 
@@ -77,6 +90,8 @@ void compiler_init(Compiler* compiler, const char* source_file) {
     compiler->loop.continue_count = 0;
     compiler->loop.continue_capacity = 0;
     compiler->native_global_offset = native_count();
+
+    compiler->debug = 0;
 }
 
 void compiler_free(Compiler* compiler) {
@@ -178,6 +193,9 @@ int compiler_add_local(Compiler* compiler, const char* name, int length) {
     FunctionState* fs = current_function_state(compiler);
     if (!fs) return -1;
 
+    compiler_debug_log(compiler, "add_local(\"%.*s\") scope_depth=%d count=%d",
+                       length, name ? name : "", fs->scope_depth, fs->locals.count);
+
     LocalTable* locals = &fs->locals;
     ensure_local_capacity(locals, locals->count + 1);
 
@@ -194,6 +212,9 @@ int compiler_add_local(Compiler* compiler, const char* name, int length) {
         fs->max_locals = locals->count;
     }
 
+    compiler_debug_log(compiler, "  add_local: idx=%d max_locals=%d",
+                       idx, fs->max_locals);
+
     return idx;
 }
 
@@ -201,39 +222,55 @@ int compiler_resolve_local(Compiler* compiler, const char* name, int length) {
     FunctionState* fs = current_function_state(compiler);
     if (!fs) return -1;
 
+    compiler_debug_log(compiler, "resolve_local(\"%.*s\") count=%d",
+                       length, name ? name : "", fs->locals.count);
+
     LocalTable* locals = &fs->locals;
     for (int i = locals->count - 1; i >= 0; i--) {
         if ((int)strlen(locals->names[i]) == length &&
             memcmp(locals->names[i], name, length) == 0) {
+            compiler_debug_log(compiler, "  resolve_local: found idx=%d", i);
             return i;
-        }
+            }
     }
+    compiler_debug_log(compiler, "  resolve_local: not found");
     return -1;
 }
 
 /* поиск/создание upvalue, рекурсивно поднимаясь по стекам функций */
 int compiler_resolve_upvalue(Compiler* compiler, const char* name, int length) {
-    if (compiler->function_depth <= 1) {
-        /* нет внешней функции */
+    compiler_debug_log(compiler, "resolve_upvalue(\"%.*s\") depth=%d current_func=%d",
+                       length, name ? name : "",
+                       compiler->function_depth, compiler->current_function);
+
+    if (compiler->current_function <= 0) {
+        compiler_debug_log(compiler, "  upvalue: no outer function (current_function=%d)",
+                           compiler->current_function);
         return -1;
     }
 
     int outer_index = compiler->current_function - 1;
-    /* сначала пробуем найти локал во внешней функции */
+    if (outer_index < 0 || outer_index >= compiler->function_depth) {
+        compiler_debug_log(compiler, "  upvalue: outer_index out of range (%d)", outer_index);
+        return -1;
+    }
+
     Compiler outer_tmp = *compiler;
     outer_tmp.current_function = outer_index;
     FunctionState* outer_fs = &compiler->functions[outer_index];
 
+    /* ищем локал во внешней функции */
     int local = compiler_resolve_local(&outer_tmp, name, length);
     if (local >= 0) {
-        /* помечаем локал как захваченный */
+        compiler_debug_log(compiler, "  upvalue: capture outer local idx=%d", local);
+
         outer_fs->locals.is_captured[local] = 1;
 
         FunctionState* fs = current_function_state(compiler);
-        /* проверим, не существует ли уже такой upvalue */
         for (int i = 0; i < fs->upvalue_count; i++) {
             UpvalueEntry* uv = &fs->upvalues[i];
             if (uv->is_local && uv->index == local) {
+                compiler_debug_log(compiler, "  upvalue: already have idx=%d", i);
                 return i;
             }
         }
@@ -241,15 +278,20 @@ int compiler_resolve_upvalue(Compiler* compiler, const char* name, int length) {
         int idx = fs->upvalue_count++;
         fs->upvalues[idx].is_local = 1;
         fs->upvalues[idx].index = local;
+        compiler_debug_log(compiler, "  upvalue: new local upvalue idx=%d", idx);
         return idx;
     }
 
+    /* ищем upvalue во внешней функции */
     int up = compiler_resolve_upvalue(&outer_tmp, name, length);
     if (up >= 0) {
+        compiler_debug_log(compiler, "  upvalue: capture outer upvalue idx=%d", up);
+
         FunctionState* fs = current_function_state(compiler);
         for (int i = 0; i < fs->upvalue_count; i++) {
             UpvalueEntry* uv = &fs->upvalues[i];
             if (!uv->is_local && uv->index == up) {
+                compiler_debug_log(compiler, "  upvalue: already have idx=%d", i);
                 return i;
             }
         }
@@ -257,9 +299,11 @@ int compiler_resolve_upvalue(Compiler* compiler, const char* name, int length) {
         int idx = fs->upvalue_count++;
         fs->upvalues[idx].is_local = 0;
         fs->upvalues[idx].index = up;
+        compiler_debug_log(compiler, "  upvalue: new non-local upvalue idx=%d", idx);
         return idx;
     }
 
+    compiler_debug_log(compiler, "  upvalue: not found");
     return -1;
 }
 
@@ -427,67 +471,119 @@ void compiler_end_function(Compiler* compiler, Bytecode* bytecode) {
 }
 
 int compiler_resolve_global(Compiler* compiler, Bytecode* bytecode, const char* name) {
+    compiler_debug_log(compiler, "resolve_global(\"%s\")", name ? name : "<null>");
+
     int raw = bc_resolve_global(bytecode, name); // 0,1,2,... внутри Bytecode
+    compiler_debug_log(compiler, "  resolve_global: raw=%d native_offset=%d",
+                       raw, compiler->native_global_offset);
+
     if (raw < 0) return -1;
     return compiler->native_global_offset + raw;
 }
 
 int compiler_define_global(Compiler* compiler, Bytecode* bytecode, const char* name, int const_idx) {
+    compiler_debug_log(compiler, "define_global(\"%s\", const_idx=%d)",
+                       name ? name : "<null>", const_idx);
+
     int raw = bc_define_global(bytecode, name, const_idx); // 0,1,2,...
+    compiler_debug_log(compiler, "  define_global: raw=%d native_offset=%d",
+                       raw, compiler->native_global_offset);
+
     if (raw < 0) return -1;
     return compiler->native_global_offset + raw;
 }
 
+
 /* ===== Основной entrypoint компиляции ===== */
 CompileResult compiler_compile(Compiler* compiler, const ASTNode* ast, Bytecode* bytecode) {
-    fprintf(stderr, "DEBUG: compile start root\n");
+    compiler_debug_log(compiler, "compile start root");
     compiler->error_count = 0;
 
     int main_index = -1;
     compiler_begin_function(compiler, bytecode, NULL, 0, 1, &main_index);
 
-    fprintf(stderr, "DEBUG: before compile_program\n");
+    compiler_debug_log(compiler, "before compile_program");
     CompileResult result = compile_program(compiler, ast, bytecode);
-    fprintf(stderr, "DEBUG: after compile_program, result=%d, errors=%d\n",
-            result, compiler->error_count);
+    compiler_debug_log(compiler, "after compile_program result=%d errors=%d",
+                       result, compiler->error_count);
 
     if (compiler->error_count == 0) {
         Bytecode* bc = current_bc(compiler, bytecode);
         emit_op(compiler, bc, OP_RETURN_NIL);
         compiler_end_function(compiler, bytecode);
-        fprintf(stderr, "DEBUG: end root OK\n");
+        compiler_debug_log(compiler, "DEBUG: end root OK\n");
         return result;
     }
 
-    fprintf(stderr, "DEBUG: end root with errors\n");
+    compiler_debug_log(compiler, "DEBUG: end root with errors\n");
     return COMPILE_ERROR;
 }
 
 
 CompileResult compile_expression(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
+    compiler_debug_log(compiler, "compile_expression: type=%d line=%d",
+                       node ? (int)node->type : -1,
+                       node ? (int)node->line : -1);
     return compile_node(compiler, node, bytecode);
 }
 
 CompileResult compile_node(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
-    if (!node) return COMPILE_SUCCESS;
+    if (!node) {
+        compiler_debug_log(compiler, "compile_node: NULL node, skip");
+        return COMPILE_SUCCESS;
+    }
+
+    compiler_debug_log(compiler, "compile_node: type=%d line=%d", node->type, node->line);
 
     switch (node->type) {
         /* выражения */
-        case NODE_LITERAL_EXPR:   return compile_literal(compiler, node, bytecode);
-        case NODE_VARIABLE_EXPR:  return compile_variable(compiler, node, bytecode);
-        case NODE_UNARY_EXPR:     return compile_unary(compiler, node, bytecode);
-        case NODE_BINARY_EXPR:    return compile_binary(compiler, node, bytecode);
-        case NODE_LOGICAL_EXPR:   return compile_logical(compiler, node, bytecode);
-        case NODE_ASSIGN_EXPR:    return compile_assign(compiler, node, bytecode);
-        case NODE_CALL_EXPR:      return compile_call(compiler, node, bytecode);
-        case NODE_ARRAY_EXPR:     return compile_array(compiler, node, bytecode);
-        case NODE_INDEX_EXPR:     return compile_index(compiler, node, bytecode);
-        case NODE_TERNARY_EXPR:   return compile_ternary(compiler, node, bytecode);
+        case NODE_LITERAL_EXPR:
+            compiler_debug_log(compiler, "  -> literal");
+            return compile_literal(compiler, node, bytecode);
+
+        case NODE_VARIABLE_EXPR:
+            compiler_debug_log(compiler, "  -> variable");
+            return compile_variable(compiler, node, bytecode);
+
+        case NODE_UNARY_EXPR:
+            compiler_debug_log(compiler, "  -> unary");
+            return compile_unary(compiler, node, bytecode);
+
+        case NODE_BINARY_EXPR:
+            compiler_debug_log(compiler, "  -> binary");
+            return compile_binary(compiler, node, bytecode);
+
+        case NODE_LOGICAL_EXPR:
+            compiler_debug_log(compiler, "  -> logical");
+            return compile_logical(compiler, node, bytecode);
+
+        case NODE_ASSIGN_EXPR:
+            compiler_debug_log(compiler, "  -> assign");
+            return compile_assign(compiler, node, bytecode);
+
+        case NODE_CALL_EXPR:
+            compiler_debug_log(compiler, "  -> call");
+            return compile_call(compiler, node, bytecode);
+
+        case NODE_ARRAY_EXPR:
+            compiler_debug_log(compiler, "  -> array");
+            return compile_array(compiler, node, bytecode);
+
+        case NODE_INDEX_EXPR:
+            compiler_debug_log(compiler, "  -> index");
+            return compile_index(compiler, node, bytecode);
+
+        case NODE_TERNARY_EXPR:
+            compiler_debug_log(compiler, "  -> ternary");
+            return compile_ternary(compiler, node, bytecode);
+
         case NODE_GROUP_EXPR:
+            compiler_debug_log(compiler, "  -> group");
             return compile_expression(compiler, node->unary.operand, bytecode);
 
         case NODE_MEMBER_EXPR:
-            return compile_member(compiler, node, bytecode); /* пока может выдавать ошибку */
+            compiler_debug_log(compiler, "  -> member");
+            return compile_member(compiler, node, bytecode);
 
         /* стейтменты */
         case NODE_EXPR_STMT:
@@ -498,66 +594,94 @@ CompileResult compile_node(Compiler* compiler, const ASTNode* node, Bytecode* by
         case NODE_FUNCTION_STMT:
         case NODE_BREAK_STMT:
         case NODE_CONTINUE_STMT:
+            compiler_debug_log(compiler, "  -> statement");
             return compile_statement(compiler, node, bytecode);
 
         case NODE_PROGRAM:
+            compiler_debug_log(compiler, "  -> program");
             return compile_program(compiler, node, bytecode);
 
         default:
+            compiler_debug_log(compiler, "  -> unsupported node type=%d", node->type);
             compiler_error_at_line(compiler, node->line, "Unsupported node type (yet)");
             return COMPILE_ERROR;
     }
 }
 
+
 CompileResult compile_statement(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
+    if (!node) {
+        compiler_debug_log(compiler, "compile_statement: NULL node, skip");
+        return COMPILE_SUCCESS;
+    }
+
+    compiler_debug_log(compiler, "compile_statement: type=%d line=%d", node->type, node->line);
+
     switch (node->type) {
         case NODE_EXPR_STMT: {
+            compiler_debug_log(compiler, "  -> expr stmt");
             Bytecode* bc = current_bc(compiler, bytecode);
             CompileResult r = compile_expression(compiler, node->expr_stmt.expression, bytecode);
-            if (r != COMPILE_SUCCESS) return r;
+            if (r != COMPILE_SUCCESS) {
+                compiler_debug_log(compiler, "  expr stmt FAILED line=%d", node->line);
+                return r;
+            }
             emit_op(compiler, bc, OP_POP);
             return COMPILE_SUCCESS;
         }
+
         case NODE_BLOCK_STMT:
+            compiler_debug_log(compiler, "  -> block stmt");
             return compile_block(compiler, node, bytecode);
 
         case NODE_IF_STMT:
+            compiler_debug_log(compiler, "  -> if stmt");
             return compile_if(compiler, node, bytecode);
 
         case NODE_FOR_STMT:
+            compiler_debug_log(compiler, "  -> for stmt");
             return compile_for(compiler, node, bytecode);
 
         case NODE_RETURN_STMT:
+            compiler_debug_log(compiler, "  -> return stmt");
             return compile_return(compiler, node, bytecode);
 
         case NODE_FUNCTION_STMT:
+            compiler_debug_log(compiler, "  -> function stmt");
             return compile_function(compiler, node, bytecode);
 
         case NODE_BREAK_STMT:
+            compiler_debug_log(compiler, "  -> break stmt");
             return compile_break(compiler, bytecode);
 
         case NODE_CONTINUE_STMT:
+            compiler_debug_log(compiler, "  -> continue stmt");
             return compile_continue(compiler, bytecode);
 
         default:
-            fprintf(stderr, "DEBUG: compile_statement unsupported type=%d at line %d\n",
-                    node->type, node->line);
+            compiler_debug_log(compiler, "  -> unsupported statement type=%d", node->type);
             compiler_error_at_line(compiler, node->line, "Unsupported statement type");
             return COMPILE_ERROR;
     }
 }
+
 
 CompileResult compile_program(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     if (!node || node->type != NODE_PROGRAM) {
         compiler_error(compiler, "Expected program node");
         return COMPILE_ERROR;
     }
+
+    compiler_debug_log(compiler, "program start");
     ASTNode* stmt = node->program.statements;
     while (stmt) {
+        compiler_debug_log(compiler, "stmt type=%d line=%d", stmt->type, stmt->line);
+
         CompileResult r = compile_node(compiler, stmt, bytecode);
         if (r != COMPILE_SUCCESS) return r;
         stmt = stmt->next;
     }
+    compiler_debug_log(compiler, "program end");
     return COMPILE_SUCCESS;
 }
 
@@ -567,17 +691,22 @@ CompileResult compile_block(Compiler* compiler, const ASTNode* node, Bytecode* b
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "compile_block: line=%d", node->line);
+
     Bytecode* bc = current_bc(compiler, bytecode);
 
     FunctionState* fs = current_function_state(compiler);
     int start_locals = fs ? fs->locals.count : 0;
 
     compiler_begin_scope(compiler);
+    compiler_debug_log(compiler, "  block: begin scope, start_locals=%d", start_locals);
 
     ASTNode* stmt = node->block.statements;
     while (stmt) {
+        compiler_debug_log(compiler, "  block: stmt type=%d line=%d", stmt->type, stmt->line);
         CompileResult r = compile_statement(compiler, stmt, bytecode);
         if (r != COMPILE_SUCCESS) {
+            compiler_debug_log(compiler, "  block: stmt FAILED line=%d", stmt->line);
             compiler_end_scope(compiler, bc, start_locals);
             return r;
         }
@@ -585,9 +714,9 @@ CompileResult compile_block(Compiler* compiler, const ASTNode* node, Bytecode* b
     }
 
     compiler_end_scope(compiler, bc, start_locals);
+    compiler_debug_log(compiler, "  block: end scope");
     return COMPILE_SUCCESS;
 }
-
 
 CompileResult compile_unary(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     if (!node || node->type != NODE_UNARY_EXPR) {
@@ -595,10 +724,16 @@ CompileResult compile_unary(Compiler* compiler, const ASTNode* node, Bytecode* b
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "compile_unary: op=%d line=%d",
+                       node->unary.operator, node->line);
+
     Bytecode* bc = current_bc(compiler, bytecode);
 
     CompileResult r = compile_expression(compiler, node->unary.operand, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  unary: operand FAILED line=%d", node->line);
+        return r;
+    }
 
     OpCode op = get_unary_opcode(node->unary.operator);
     if (op == OP_NOP) {
@@ -606,9 +741,11 @@ CompileResult compile_unary(Compiler* compiler, const ASTNode* node, Bytecode* b
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "  unary: emit op=%d", op);
     emit_op(compiler, bc, op);
     return COMPILE_SUCCESS;
 }
+
 
 CompileResult compile_binary(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     if (!node || node->type != NODE_BINARY_EXPR) {
@@ -616,13 +753,24 @@ CompileResult compile_binary(Compiler* compiler, const ASTNode* node, Bytecode* 
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "compile_binary: op=%d line=%d",
+                       node->binary.operator, node->line);
+
     Bytecode* bc = current_bc(compiler, bytecode);
 
+    compiler_debug_log(compiler, "  binary: left");
     CompileResult r = compile_expression(compiler, node->binary.left, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  binary: left FAILED line=%d", node->line);
+        return r;
+    }
 
+    compiler_debug_log(compiler, "  binary: right");
     r = compile_expression(compiler, node->binary.right, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  binary: right FAILED line=%d", node->line);
+        return r;
+    }
 
     OpCode op = get_binary_opcode(node->binary.operator);
     if (op == OP_NOP) {
@@ -630,11 +778,20 @@ CompileResult compile_binary(Compiler* compiler, const ASTNode* node, Bytecode* 
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "  binary: emit op=%d", op);
     emit_op(compiler, bc, op);
     return COMPILE_SUCCESS;
 }
 
-CompileResult compile_postfix(Compiler* c, const ASTNode* n, Bytecode* b){(void)c;(void)n;(void)b;return COMPILE_ERROR;}
+CompileResult compile_postfix(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
+    (void)bytecode;
+
+    compiler_debug_log(compiler, "compile_postfix: UNUSED helper called, line=%d type=%d",
+                       node ? (int)node->line : -1,
+                       node ? (int)node->type : -1);
+
+    return COMPILE_ERROR;
+}
 
 CompileResult compile_literal(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     if (!node || node->type != NODE_LITERAL_EXPR) {
@@ -642,14 +799,17 @@ CompileResult compile_literal(Compiler* compiler, const ASTNode* node, Bytecode*
         return COMPILE_ERROR;
     }
 
-    Bytecode* bc = current_bc(compiler, bytecode);
+    compiler_debug_log(compiler, "compile_literal: line=%d kind=%d",
+                       node->line, node->literal.value_type);
 
+    Bytecode* bc = current_bc(compiler, bytecode);
     int const_idx = -1;
 
     switch (node->literal.value_type) {
         case LIT_NUMBER: {
             double value = node->literal.value.number;
             int64_t iv = (int64_t)value;
+            compiler_debug_log(compiler, "  literal number=%g", value);
             if ((double)iv == value) {
                 const_idx = compiler_add_const_int(bytecode, iv);
             } else {
@@ -659,48 +819,57 @@ CompileResult compile_literal(Compiler* compiler, const ASTNode* node, Bytecode*
         }
         case LIT_STRING: {
             const char* s = node->literal.value.string;
+            compiler_debug_log(compiler, "  literal string=\"%s\"", s ? s : "");
             const_idx = compiler_add_const_string(bytecode, s ? s : "");
             break;
         }
         case LIT_BOOL: {
+            compiler_debug_log(compiler, "  literal bool=%d", node->literal.value.boolean ? 1 : 0);
             const_idx = compiler_add_const_int(bytecode,
                                                node->literal.value.boolean ? 1 : 0);
             break;
         }
         case LIT_NIL: {
-            /* nil можно закодировать как int 0 с особой трактовкой в VM или
-               позже добавить специальную константу; пока используем 0. */
+            compiler_debug_log(compiler, "  literal nil");
             const_idx = compiler_add_const_int(bytecode, 0);
             break;
         }
         default:
+            compiler_debug_log(compiler, "  literal: unknown type=%d", node->literal.value_type);
             compiler_error_at_line(compiler, node->line, "Unknown literal type");
             return COMPILE_ERROR;
     }
 
     if (const_idx < 0) {
+        compiler_debug_log(compiler, "  literal: failed to add const");
         compiler_error_at_line(compiler, node->line, "Failed to add constant");
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "  literal: const_idx=%d", const_idx);
     emit_op(compiler, bc, OP_LOAD_CONST_U16);
     emit_u16(compiler, bc, (uint16_t)const_idx);
     return COMPILE_SUCCESS;
 }
+
 CompileResult compile_variable(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     if (!node || node->type != NODE_VARIABLE_EXPR) {
         compiler_error_at_line(compiler, node ? node->line : 0, "Expected variable expression");
         return COMPILE_ERROR;
     }
 
-    Bytecode* bc = current_bc(compiler, bytecode);
-
     const char* name = node->variable.name;
     int length = (int)node->variable.name_length;
+
+    compiler_debug_log(compiler, "compile_variable: \"%.*s\" line=%d",
+                       length, name, node->line);
+
+    Bytecode* bc = current_bc(compiler, bytecode);
 
     /* 1) локал */
     int local = compiler_resolve_local(compiler, name, length);
     if (local >= 0) {
+        compiler_debug_log(compiler, "  -> local index=%d", local);
         if (local <= 0xFF) {
             emit_op(compiler, bc, OP_LOAD_LOCAL_U8);
             emit_u8(compiler, bc, (uint8_t)local);
@@ -714,6 +883,7 @@ CompileResult compile_variable(Compiler* compiler, const ASTNode* node, Bytecode
     /* 2) upvalue */
     int up = compiler_resolve_upvalue(compiler, name, length);
     if (up >= 0) {
+        compiler_debug_log(compiler, "  -> upvalue index=%d", up);
         if (up <= 0xFF) {
             emit_op(compiler, bc, OP_LOAD_UPVALUE_U8);
             emit_u8(compiler, bc, (uint8_t)up);
@@ -724,9 +894,11 @@ CompileResult compile_variable(Compiler* compiler, const ASTNode* node, Bytecode
         return COMPILE_SUCCESS;
     }
 
+    /* 3) native */
     NativeInfo* native_info = native_get_info(name);
     if (native_info != NULL) {
         int global_index = native_get_global_index(name);
+        compiler_debug_log(compiler, "  -> native \"%s\" global_index=%d", name, global_index);
         if (global_index < 0) {
             char buf[256];
             snprintf(buf, sizeof(buf), "Native '%s' not registered", name);
@@ -738,13 +910,16 @@ CompileResult compile_variable(Compiler* compiler, const ASTNode* node, Bytecode
         return COMPILE_SUCCESS;
     }
 
+    /* 4) глобал */
     int global = compiler_resolve_global(compiler, bytecode, name);
     if (global >= 0) {
+        compiler_debug_log(compiler, "  -> global index=%d", global);
         emit_op(compiler, bc, OP_LOAD_GLOBAL_U16);
         emit_u16(compiler, bc, (uint16_t)global);
         return COMPILE_SUCCESS;
     }
 
+    compiler_debug_log(compiler, "  -> unknown variable");
     compiler_error_at_line(compiler, node->line, "Unknown variable");
     return COMPILE_ERROR;
 }
@@ -755,22 +930,32 @@ CompileResult compile_assign(Compiler* compiler, const ASTNode* node, Bytecode* 
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "compile_assign: line=%d", node->line);
+
     Bytecode* bc = current_bc(compiler, bytecode);
 
     const ASTNode* target = node->assign.target;
     const ASTNode* value  = node->assign.value;
 
+    compiler_debug_log(compiler, "  assign: target_type=%d", target ? (int)target->type : -1);
+
     /* сначала вычисляем правую часть */
     CompileResult r = compile_expression(compiler, value, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  assign: value FAILED");
+        return r;
+    }
 
-        if (target->type == NODE_VARIABLE_EXPR) {
+    if (target->type == NODE_VARIABLE_EXPR) {
         const char* name = target->variable.name;
         int length = (int)target->variable.name_length;
+
+        compiler_debug_log(compiler, "  assign to variable \"%.*s\"", length, name);
 
         /* 1) локал */
         int local = compiler_resolve_local(compiler, name, length);
         if (local >= 0) {
+            compiler_debug_log(compiler, "    -> local index=%d", local);
             if (local > 0xFF) {
                 compiler_error_at_line(compiler, node->line, "Too many locals");
                 return COMPILE_ERROR;
@@ -780,9 +965,10 @@ CompileResult compile_assign(Compiler* compiler, const ASTNode* node, Bytecode* 
             return COMPILE_SUCCESS;
         }
 
-        /* 2) upvalue (присваивание в замыкание) */
+        /* 2) upvalue */
         int up = compiler_resolve_upvalue(compiler, name, length);
         if (up >= 0) {
+            compiler_debug_log(compiler, "    -> upvalue index=%d", up);
             if (up > 0xFF) {
                 compiler_error_at_line(compiler, node->line, "Too many upvalues");
                 return COMPILE_ERROR;
@@ -792,23 +978,28 @@ CompileResult compile_assign(Compiler* compiler, const ASTNode* node, Bytecode* 
             return COMPILE_SUCCESS;
         }
 
-        /* 3) глобал: создаём или обновляем */
+        /* 3) глобал */
         char buf[256];
         int name_len = length < (int)sizeof(buf)-1 ? length : (int)sizeof(buf)-1;
         memcpy(buf, name, name_len);
         buf[name_len] = '\0';
 
+        compiler_debug_log(compiler, "    -> global lookup \"%s\"", buf);
+
         int global = compiler_resolve_global(compiler, bytecode, buf);
         if (global < 0) {
-            /* Если хочешь поведение let/var, можно: при первом присваивании
-               считать объявлением и завести глобал с начальным значением. */
+            compiler_debug_log(compiler, "    -> define new global \"%s\"", buf);
             int const_idx = -1;
             global = compiler_define_global(compiler, bytecode, buf, const_idx);
             if (global < 0) {
                 compiler_error_at_line(compiler, node->line, "Failed to define global");
                 return COMPILE_ERROR;
             }
+        } else {
+            compiler_debug_log(compiler, "    -> existing global index=%d", global);
         }
+
+        compiler_debug_log(compiler, "    -> emit STORE_GLOBAL index=%d", global);
 
         emit_op(compiler, bc, OP_STORE_GLOBAL_U16);
         emit_u16(compiler, bc, (uint16_t)global);
@@ -816,33 +1007,36 @@ CompileResult compile_assign(Compiler* compiler, const ASTNode* node, Bytecode* 
     }
 
     if (target->type == NODE_INDEX_EXPR) {
-        /* arr[index] = value:
-           стек к моменту OP_ARRAY_SET должен быть: arr, index, value.
-           Сейчас на стеке только value -> надо собрать arr и index ПЕРЕД value.
-           Проще пересобрать всё: arr, index, value. */
+        compiler_debug_log(compiler, "  assign to index expr");
 
-        /* убираем value со стека, чтобы не дублировать.
-           Пока нет специального dup, проще сделать:
-           - перестроить выражение так, чтобы сначала arr/index, потом value.
-           Для простоты: пере‑компилируем по порядку arr, index, value. */
-
-        /* Оптимизацией займёмся позже; сейчас просто три expression. */
-        /* Очистим value: POP */
+        /* сейчас на стеке value; перепостроим arr, index, value */
         emit_op(compiler, bc, OP_POP);
+        compiler_debug_log(compiler, "    popped original value to rebuild arr,index,value");
 
         r = compile_expression(compiler, target->index.array, bytecode);
-        if (r != COMPILE_SUCCESS) return r;
+        if (r != COMPILE_SUCCESS) {
+            compiler_debug_log(compiler, "    array expr FAILED");
+            return r;
+        }
 
         r = compile_expression(compiler, target->index.index, bytecode);
-        if (r != COMPILE_SUCCESS) return r;
+        if (r != COMPILE_SUCCESS) {
+            compiler_debug_log(compiler, "    index expr FAILED");
+            return r;
+        }
 
         r = compile_expression(compiler, value, bytecode);
-        if (r != COMPILE_SUCCESS) return r;
+        if (r != COMPILE_SUCCESS) {
+            compiler_debug_log(compiler, "    value expr FAILED (rebuild)");
+            return r;
+        }
 
+        compiler_debug_log(compiler, "    emit OP_ARRAY_SET");
         emit_op(compiler, bc, OP_ARRAY_SET);
         return COMPILE_SUCCESS;
     }
 
+    compiler_debug_log(compiler, "  assign: invalid target_type=%d", target->type);
     compiler_error_at_line(compiler, node->line, "Invalid assignment target");
     return COMPILE_ERROR;
 }
@@ -853,21 +1047,35 @@ CompileResult compile_call(Compiler* compiler, const ASTNode* node, Bytecode* by
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "compile_call: line=%d argc=%zu",
+                       node->line, node->call.arg_count);
+
     Bytecode* bc = current_bc(compiler, bytecode);
 
     const ASTNode* callee = node->call.callee;
 
     /* сначала callee */
+    compiler_debug_log(compiler, "  call: callee type=%d", callee ? (int)callee->type : -1);
     CompileResult r = compile_expression(compiler, callee, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  call: callee FAILED");
+        return r;
+    }
 
     /* затем аргументы */
     for (size_t i = 0; i < node->call.arg_count; i++) {
+        compiler_debug_log(compiler, "  call: arg[%zu] type=%d",
+                           i, node->call.arguments[i]->type);
         r = compile_expression(compiler, node->call.arguments[i], bytecode);
-        if (r != COMPILE_SUCCESS) return r;
+        if (r != COMPILE_SUCCESS) {
+            compiler_debug_log(compiler, "  call: arg[%zu] FAILED", i);
+            return r;
+        }
     }
 
     size_t argc = node->call.arg_count;
+    compiler_debug_log(compiler, "  call: emit CALL argc=%zu", argc);
+
     if (argc <= 0xFF) {
         emit_op(compiler, bc, OP_CALL_U8);
         emit_u8(compiler, bc, (uint8_t)argc);
@@ -885,27 +1093,38 @@ CompileResult compile_logical(Compiler* compiler, const ASTNode* node, Bytecode*
         return COMPILE_ERROR;
     }
 
-    Bytecode* bc = current_bc(compiler, bytecode);
+    compiler_debug_log(compiler, "compile_logical: line=%d op=%d",
+                       node->line, node->logical.operator);
 
+    Bytecode* bc = current_bc(compiler, bytecode);
     TokenType op = node->logical.operator;
 
     /* left */
+    compiler_debug_log(compiler, "  logical: left");
     CompileResult r = compile_expression(compiler, node->logical.left, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  logical: left FAILED");
+        return r;
+    }
 
     size_t jump_pos = 0;
 
     if (op == TOKEN_OR) {
-        /* OR: если left true — перескакиваем right */
+        compiler_debug_log(compiler, "  logical: emit JUMP_IF_TRUE");
         emit_jump_u16(compiler, bc, OP_JUMP_IF_TRUE_U16, &jump_pos);
     } else {
-        /* AND: если left false — перескакиваем right */
+        compiler_debug_log(compiler, "  logical: emit JUMP_IF_FALSE");
         emit_jump_u16(compiler, bc, OP_JUMP_IF_FALSE_U16, &jump_pos);
     }
 
+    compiler_debug_log(compiler, "  logical: right");
     r = compile_expression(compiler, node->logical.right, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  logical: right FAILED");
+        return r;
+    }
 
+    compiler_debug_log(compiler, "  logical: patch jump at %zu", jump_pos);
     patch_jump_u16(bc, jump_pos);
     return COMPILE_SUCCESS;
 }
@@ -916,19 +1135,30 @@ CompileResult compile_array(Compiler* compiler, const ASTNode* node, Bytecode* b
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "compile_array: line=%d count=%zu",
+                       node->line, node->array.element_count);
+
     Bytecode* bc = current_bc(compiler, bytecode);
 
     /* сначала все элементы на стек */
     for (size_t i = 0; i < node->array.element_count; i++) {
+        compiler_debug_log(compiler, "  array: elem[%zu] type=%d",
+                           i, node->array.elements[i]->type);
         CompileResult r = compile_expression(compiler, node->array.elements[i], bytecode);
-        if (r != COMPILE_SUCCESS) return r;
+        if (r != COMPILE_SUCCESS) {
+            compiler_debug_log(compiler, "  array: elem[%zu] FAILED", i);
+            return r;
+        }
     }
 
     if (node->array.element_count > 0xFF) {
+        compiler_debug_log(compiler, "  array: too many elements=%zu",
+                           node->array.element_count);
         compiler_error_at_line(compiler, node->line, "Too many array elements");
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "  array: emit ARRAY_NEW %zu", node->array.element_count);
     emit_op(compiler, bc, OP_ARRAY_NEW_U8);
     emit_u8(compiler, bc, (uint8_t)node->array.element_count);
     return COMPILE_SUCCESS;
@@ -940,23 +1170,41 @@ CompileResult compile_index(Compiler* compiler, const ASTNode* node, Bytecode* b
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "compile_index: line=%d", node->line);
+
     Bytecode* bc = current_bc(compiler, bytecode);
 
+    compiler_debug_log(compiler, "  index: array expr");
     CompileResult r = compile_expression(compiler, node->index.array, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  index: array FAILED");
+        return r;
+    }
 
+    compiler_debug_log(compiler, "  index: index expr");
     r = compile_expression(compiler, node->index.index, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  index: index FAILED");
+        return r;
+    }
 
+    compiler_debug_log(compiler, "  index: emit OP_ARRAY_GET");
     emit_op(compiler, bc, OP_ARRAY_GET);
     return COMPILE_SUCCESS;
 }
 
+
 CompileResult compile_member(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
-    (void)compiler; (void)node; (void)bytecode;
-    compiler_error_at_line(compiler, node ? node->line : 0, "Member expressions not yet implemented");
+    (void)bytecode;
+
+    compiler_debug_log(compiler, "compile_member: line=%d (NOT IMPLEMENTED)",
+                       node ? node->line : -1);
+
+    compiler_error_at_line(compiler, node ? node->line : 0,
+                           "Member expressions not yet implemented");
     return COMPILE_ERROR;
 }
+
 
 CompileResult compile_ternary(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     if (!node || node->type != NODE_TERNARY_EXPR) {
@@ -964,28 +1212,46 @@ CompileResult compile_ternary(Compiler* compiler, const ASTNode* node, Bytecode*
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "compile_ternary: line=%d", node->line);
+
     Bytecode* bc = current_bc(compiler, bytecode);
 
     /* condition */
+    compiler_debug_log(compiler, "  ternary: condition");
     CompileResult r = compile_expression(compiler, node->ternary.condition, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  ternary: condition FAILED");
+        return r;
+    }
 
     size_t else_jump = 0;
+    compiler_debug_log(compiler, "  ternary: emit JUMP_IF_FALSE");
     emit_jump_u16(compiler, bc, OP_JUMP_IF_FALSE_U16, &else_jump);
 
     /* then */
+    compiler_debug_log(compiler, "  ternary: then");
     r = compile_expression(compiler, node->ternary.then_expr, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  ternary: then FAILED");
+        return r;
+    }
 
     size_t end_jump = 0;
+    compiler_debug_log(compiler, "  ternary: emit JUMP to end");
     emit_jump_u16(compiler, bc, OP_JUMP_U16, &end_jump);
 
+    compiler_debug_log(compiler, "  ternary: patch else_jump at %zu", else_jump);
     patch_jump_u16(bc, else_jump);
 
     /* else */
+    compiler_debug_log(compiler, "  ternary: else");
     r = compile_expression(compiler, node->ternary.else_expr, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  ternary: else FAILED");
+        return r;
+    }
 
+    compiler_debug_log(compiler, "  ternary: patch end_jump at %zu", end_jump);
     patch_jump_u16(bc, end_jump);
     return COMPILE_SUCCESS;
 }
@@ -996,45 +1262,60 @@ CompileResult compile_if(Compiler* compiler, const ASTNode* node, Bytecode* byte
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "compile_if: line=%d", node->line);
+
     Bytecode* bc = current_bc(compiler, bytecode);
 
-    // 1. Скомпилировать условие (оставляет bool на вершине стека)
+    // 1. Условие
+    compiler_debug_log(compiler, "  if: condition");
     CompileResult r = compile_expression(compiler, node->if_stmt.condition, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  if: condition FAILED");
+        return r;
+    }
 
     // 2. Прыжок, если false
     size_t else_jump = 0;
+    compiler_debug_log(compiler, "  if: emit JUMP_IF_FALSE");
     emit_jump_u16(compiler, bc, OP_JUMP_IF_FALSE_U16, &else_jump);
 
-    // 3. THEN-ветка: убрать условие
-    emit_op(compiler, bc, OP_POP);  // *** добавить POP здесь ***
-
+    compiler_debug_log(compiler, "  if: THEN branch");
     r = compile_statement(compiler, node->if_stmt.then_branch, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  if: THEN branch FAILED");
+        return r;
+    }
 
     size_t end_jump = 0;
     if (node->if_stmt.else_branch) {
+        compiler_debug_log(compiler, "  if: emit JUMP to end (has else)");
         emit_jump_u16(compiler, bc, OP_JUMP_U16, &end_jump);
     }
 
     // 4. Патч прыжка на else
+    compiler_debug_log(compiler, "  if: patch else_jump at %zu", else_jump);
     patch_jump_u16(bc, else_jump);
 
     if (node->if_stmt.else_branch) {
-        // 5. ELSE-ветка: убрать условие для ветки, в которую прыгнули
-        emit_op(compiler, bc, OP_POP);  // *** и здесь тоже POP ***
+        // 5. ELSE-ветка: убрать условие
+        compiler_debug_log(compiler, "  if: ELSE POP cond");
 
+        compiler_debug_log(compiler, "  if: ELSE branch");
         r = compile_statement(compiler, node->if_stmt.else_branch, bytecode);
-        if (r != COMPILE_SUCCESS) return r;
+        if (r != COMPILE_SUCCESS) {
+            compiler_debug_log(compiler, "  if: ELSE branch FAILED");
+            return r;
+        }
+
+        compiler_debug_log(compiler, "  if: patch end_jump at %zu", end_jump);
         patch_jump_u16(bc, end_jump);
     } else {
-        // if без else: в false-ветке тоже нужно убрать условие
-        emit_op(compiler, bc, OP_POP);  // *** POP после патча, если else нет ***
+        compiler_debug_log(compiler, "  if: no ELSE, POP cond in false branch");
     }
 
+    compiler_debug_log(compiler, "compile_if: done line=%d", node->line);
     return COMPILE_SUCCESS;
 }
-
 
 CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     if (!node || node->type != NODE_FOR_STMT) {
@@ -1042,15 +1323,20 @@ CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* byt
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "compile_for: start line=%d", node->line);
+
     Bytecode* bc = current_bc(compiler, bytecode);
 
     compiler_begin_scope(compiler);
+    compiler_debug_log(compiler, "  for: begin scope");
 
-    /* init */
-    /* init: парсер кладёт сюда Assign (NODE_ASSIGN_EXPR), это выражение, а не стейтмент */
+    /* init: выражение */
     if (node->for_stmt.initializer) {
+        compiler_debug_log(compiler, "  for: init expr type=%d",
+                           node->for_stmt.initializer->type);
         CompileResult r = compile_expression(compiler, node->for_stmt.initializer, bytecode);
         if (r != COMPILE_SUCCESS) {
+            compiler_debug_log(compiler, "  for: init FAILED");
             compiler_end_scope(compiler, bc,
                                current_function_state(compiler)->locals.count);
             return r;
@@ -1059,23 +1345,30 @@ CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* byt
     }
 
     size_t loop_start = bc->code_size;
+    compiler_debug_log(compiler, "  for: loop_start=%zu", loop_start);
 
     /* condition */
     size_t exit_jump = 0;
     if (node->for_stmt.condition) {
+        compiler_debug_log(compiler, "  for: condition expr type=%d",
+                           node->for_stmt.condition->type);
         CompileResult r = compile_expression(compiler, node->for_stmt.condition, bytecode);
         if (r != COMPILE_SUCCESS) {
+            compiler_debug_log(compiler, "  for: condition FAILED");
             compiler_end_scope(compiler, bc, current_function_state(compiler)->locals.count);
             return r;
         }
+        compiler_debug_log(compiler, "  for: emit JUMP_IF_FALSE (exit)");
         emit_jump_u16(compiler, bc, OP_JUMP_IF_FALSE_U16, &exit_jump);
     }
 
-    /* тело + учёт break/continue */
+    /* тело + break/continue */
     compiler_begin_loop(compiler);
+    compiler_debug_log(compiler, "  for: begin loop body");
 
     CompileResult r = compile_statement(compiler, node->for_stmt.body, bytecode);
     if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  for: body FAILED");
         compiler_end_loop(compiler, bc);
         compiler_end_scope(compiler, bc, current_function_state(compiler)->locals.count);
         return r;
@@ -1083,8 +1376,11 @@ CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* byt
 
     /* increment */
     if (node->for_stmt.increment) {
+        compiler_debug_log(compiler, "  for: increment expr type=%d",
+                           node->for_stmt.increment->type);
         r = compile_expression(compiler, node->for_stmt.increment, bytecode);
         if (r != COMPILE_SUCCESS) {
+            compiler_debug_log(compiler, "  for: increment FAILED");
             compiler_end_loop(compiler, bc);
             compiler_end_scope(compiler, bc, current_function_state(compiler)->locals.count);
             return r;
@@ -1092,18 +1388,24 @@ CompileResult compile_for(Compiler* compiler, const ASTNode* node, Bytecode* byt
         emit_op(compiler, bc, OP_POP);
     }
 
+    compiler_debug_log(compiler, "  for: emit loop back to %zu", loop_start);
     emit_loop_u16(compiler, bc, loop_start);
 
     size_t end_ip = bc->code_size;
+    compiler_debug_log(compiler, "  for: patch continues to %zu", loop_start);
     compiler_patch_continues(compiler, bc, loop_start);
+    compiler_debug_log(compiler, "  for: patch breaks to %zu", end_ip);
     compiler_patch_breaks(compiler, bc, end_ip);
 
     if (node->for_stmt.condition) {
+        compiler_debug_log(compiler, "  for: patch exit_jump at %zu", exit_jump);
         patch_jump_u16(bc, exit_jump);
     }
 
     compiler_end_loop(compiler, bc);
     compiler_end_scope(compiler, bc, current_function_state(compiler)->locals.count);
+
+    compiler_debug_log(compiler, "compile_for: end line=%d", node->line);
     return COMPILE_SUCCESS;
 }
 
@@ -1116,11 +1418,16 @@ CompileResult compile_function(Compiler* compiler, const ASTNode* node, Bytecode
     const char* name = node->function_stmt.name;
     size_t name_len  = node->function_stmt.name_length;
 
-    /* 1) объявляем имя функции как локальную переменную в текущем scope */
+    compiler_debug_log(compiler, "compile_function: \"%.*s\" line=%d params=%zu",
+                       (int)name_len, name ? name : "",
+                       node->line, node->function_stmt.param_count);
+
+    /* 1) объявляем имя функции как локал */
     int local_index = -1;
     if (name && name_len > 0) {
         local_index = compiler_resolve_local(compiler, name, (int)name_len);
         if (local_index < 0) {
+            compiler_debug_log(compiler, "  function: add local name");
             local_index = compiler_add_local(compiler, name, (int)name_len);
             if (local_index < 0) {
                 compiler_error_at_line(compiler, node->line, "Failed to add function name as local");
@@ -1131,23 +1438,29 @@ CompileResult compile_function(Compiler* compiler, const ASTNode* node, Bytecode
             compiler_error_at_line(compiler, node->line, "Too many locals");
             return COMPILE_ERROR;
         }
+        compiler_debug_log(compiler, "  function: local_index=%d", local_index);
     }
 
     /* 2) начинаем новую функцию */
     int func_index = -1;
+    compiler_debug_log(compiler, "  function: begin function \"%.*s\"",
+                       (int)name_len, name ? name : "");
     compiler_begin_function(compiler,
-                            bytecode,                 // модуль
+                            bytecode,
                             name ? name : "<fn>",
                             (int)node->function_stmt.param_count,
                             node->line,
                             &func_index);
 
     FunctionState* fs = current_function_state(compiler);
+    compiler_debug_log(compiler, "  function: func_index=%d", func_index);
 
-    /* 3) параметры как локалы функции */
+    /* 3) параметры как локалы */
     for (size_t i = 0; i < node->function_stmt.param_count; i++) {
         const char* param_name = node->function_stmt.parameters[i];
         int param_len = (int)strlen(param_name);
+        compiler_debug_log(compiler, "  function: add param[%zu] \"%.*s\"",
+                           i, param_len, param_name);
         int idx = compiler_add_local(compiler, param_name, param_len);
         if (idx < 0) {
             compiler_error_at_line(compiler, node->line, "Failed to add function parameter");
@@ -1155,44 +1468,51 @@ CompileResult compile_function(Compiler* compiler, const ASTNode* node, Bytecode
         }
     }
 
-    /* тело функции — блок (эмитит в fs->func_bc через current_bc) */
+    /* тело функции */
+    compiler_debug_log(compiler, "  function: body block");
     CompileResult r = compile_block(compiler, node->function_stmt.body, bytecode);
-    if (r != COMPILE_SUCCESS) return r;
+    if (r != COMPILE_SUCCESS) {
+        compiler_debug_log(compiler, "  function: body FAILED");
+        return r;
+    }
 
-    /* гарантируем return nil, если пользователь не добавил return */
+    /* return nil */
     Bytecode* fbc = current_bc(compiler, bytecode);
+    compiler_debug_log(compiler, "  function: emit implicit RETURN_NIL");
     emit_op(compiler, fbc, OP_RETURN_NIL);
 
-    /* завершаем функцию: перенесёт upvalues и скопирует код в модульный bytecode */
+    /* завершить функцию */
+    compiler_debug_log(compiler, "  function: end function");
     compiler_end_function(compiler, bytecode);
 
-    /* ВАЖНО: после end_function мы уже во внешней функции, current_bc сменился */
+    /* назад во внешнюю функцию */
     Bytecode* bc = current_bc(compiler, bytecode);
 
-    /* 4) в родительской функции: создаём константу CLOSURE для этой функции */
     uint16_t upcount = (uint16_t)fs->upvalue_count;
+    compiler_debug_log(compiler, "  function: upvalues=%u", (unsigned)upcount);
     int closure_const = bc_add_closure(bytecode, (uint32_t)func_index, upcount);
     if (closure_const < 0) {
         compiler_error_at_line(compiler, node->line, "Failed to add closure constant");
         return COMPILE_ERROR;
     }
 
-    /* 5) создаём новый closure в рантайме */
+    compiler_debug_log(compiler, "  function: emit LOAD_CONST closure_const=%d", closure_const);
     emit_op(compiler, bc, OP_LOAD_CONST_U16);
     emit_u16(compiler, bc, (uint16_t)closure_const);
 
-    /* OP_NEW_CLOSURE: VM возьмёт константу CLOSURE и подготовит upvalues */
+    compiler_debug_log(compiler, "  function: emit NEW_CLOSURE");
     emit_op(compiler, bc, OP_NEW_CLOSURE);
 
-    /* 6) сохраняем closure в локал с именем функции (если имя есть) */
     if (local_index >= 0) {
+        compiler_debug_log(compiler, "  function: store closure to local %d", local_index);
         emit_op(compiler, bc, OP_STORE_LOCAL_U8);
         emit_u8(compiler, bc, (uint8_t)local_index);
     }
 
+    compiler_debug_log(compiler, "compile_function: end \"%.*s\"",
+                       (int)name_len, name ? name : "");
     return COMPILE_SUCCESS;
 }
-
 
 CompileResult compile_return(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
     if (!node || node->type != NODE_RETURN_STMT) {
@@ -1200,21 +1520,30 @@ CompileResult compile_return(Compiler* compiler, const ASTNode* node, Bytecode* 
         return COMPILE_ERROR;
     }
 
+    compiler_debug_log(compiler, "compile_return: line=%d has_value=%d",
+                       node->line, node->return_stmt.value != NULL);
+
     Bytecode* bc = current_bc(compiler, bytecode);
 
     if (node->return_stmt.value) {
         CompileResult r = compile_expression(compiler, node->return_stmt.value, bytecode);
-        if (r != COMPILE_SUCCESS) return r;
+        if (r != COMPILE_SUCCESS) {
+            compiler_debug_log(compiler, "  return: value FAILED");
+            return r;
+        }
+        compiler_debug_log(compiler, "  return: emit OP_RETURN");
         emit_op(compiler, bc, OP_RETURN);
     } else {
+        compiler_debug_log(compiler, "  return: emit OP_RETURN_NIL");
         emit_op(compiler, bc, OP_RETURN_NIL);
     }
 
     return COMPILE_SUCCESS;
 }
 
-
 CompileResult compile_break(Compiler* compiler, Bytecode* bytecode) {
+    compiler_debug_log(compiler, "compile_break");
+
     if (compiler->loop.loop_depth <= 0) {
         compiler_error(compiler, "break used outside of loop");
         return COMPILE_ERROR;
@@ -1226,17 +1555,20 @@ CompileResult compile_break(Compiler* compiler, Bytecode* bytecode) {
     if (compiler->loop.break_count >= compiler->loop.break_capacity) {
         int old = compiler->loop.break_capacity;
         int new_cap = old < 8 ? 8 : old * 2;
+        compiler_debug_log(compiler, "  break: grow break_jumps from %d to %d", old, new_cap);
         compiler->loop.break_jumps = (size_t*)grow_array_raw(
             compiler->loop.break_jumps, old, new_cap, sizeof(size_t));
         compiler->loop.break_capacity = new_cap;
     }
+    compiler_debug_log(compiler, "  break: record jump at %zu", bc->code_size);
     compiler->loop.break_jumps[compiler->loop.break_count++] = bc->code_size;
     emit_u16(compiler, bc, 0);
     return COMPILE_SUCCESS;
 }
 
-
 CompileResult compile_continue(Compiler* compiler, Bytecode* bytecode) {
+    compiler_debug_log(compiler, "compile_continue");
+
     if (compiler->loop.loop_depth <= 0) {
         compiler_error(compiler, "continue used outside of loop");
         return COMPILE_ERROR;
@@ -1248,15 +1580,16 @@ CompileResult compile_continue(Compiler* compiler, Bytecode* bytecode) {
     if (compiler->loop.continue_count >= compiler->loop.continue_capacity) {
         int old = compiler->loop.continue_capacity;
         int new_cap = old < 8 ? 8 : old * 2;
+        compiler_debug_log(compiler, "  continue: grow continue_jumps from %d to %d", old, new_cap);
         compiler->loop.continue_jumps = (size_t*)grow_array_raw(
             compiler->loop.continue_jumps, old, new_cap, sizeof(size_t));
         compiler->loop.continue_capacity = new_cap;
     }
+    compiler_debug_log(compiler, "  continue: record jump at %zu", bc->code_size);
     compiler->loop.continue_jumps[compiler->loop.continue_count++] = bc->code_size;
     emit_u16(compiler, bc, 0);
     return COMPILE_SUCCESS;
 }
-
 
 /* операторы → opcode */
 int get_operator_precedence(TokenType type) {
