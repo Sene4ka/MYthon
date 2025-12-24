@@ -37,7 +37,7 @@ const uint8_t opcode_operand_length[256] = {
     [OP_RETURN_NIL] = 0,
 
     // Closures / classes
-    [OP_NEW_CLOSURE]   = 2,    // func_idx (U16 в таблице функций)
+    [OP_NEW_CLOSURE]   = 0,    // func_idx (U16 в таблице функций)
     [OP_NEW_CLASS]     = 2,    // class_idx (U16 в таблице классов)
     [OP_LOAD_FIELD_U8] = 1,    // field_idx
     [OP_STORE_FIELD_U8]= 1,
@@ -565,8 +565,7 @@ void bc_disassemble(Bytecode* bc, const char* name) {
             case OP_RETURN_NIL: printf("RETURN_NIL"); break;
 
             case OP_NEW_CLOSURE: {
-                uint16_t fidx = (uint16_t)((bc->code[ip+1] << 8) | bc->code[ip+2]);
-                printf("NEW_CLOSURE func=%u", fidx);
+                printf("NEW_CLOSURE");
                 break;
             }
             case OP_NEW_CLASS: {

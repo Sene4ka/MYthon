@@ -122,12 +122,14 @@ static Bytecode* compile_source(const char* source, const char* filename, int op
         return NULL;
     }
 
-    if (debug) ast_print(ast, 0);
+    (void) debug;
+
+    //if (debug) ast_print(ast, 0);
 
     Bytecode* bc = bytecode_new();
     Compiler compiler;
     compiler_init(&compiler, filename);
-    compiler.debug = debug;
+    //compiler.debug = debug;
 
     CompileResult result = compiler_compile(&compiler, ast, bc);
 
