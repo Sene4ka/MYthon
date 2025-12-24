@@ -74,6 +74,8 @@ typedef struct {
 
     int locals_at_toplevel; /* сколько локалов было в корневой функции на входе */
     int native_global_offset;
+
+    int debug;
 } Compiler;
 
 /* ===== lifecycle ===== */

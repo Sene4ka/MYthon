@@ -10,17 +10,12 @@ int main(int argc, char *argv[]) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
 #endif
-
-    printf("DEBUG: enter main\n");
     CLIArgs args = parse_args(argc, argv);
     int result = 0;
-    printf("DEBUG: exit parse args\n");
 
     switch (args.mode) {
         case MODE_RUN:
-            printf("DEBUG: enter run\n");
             result = run_file(args);
-            printf("DEBUG: exit run\n");
             break;
         case MODE_COMPILE:
             result = compile_file(args);

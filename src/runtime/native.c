@@ -17,9 +17,6 @@ static NativeInfo native_functions[] = {
         {"pop", 1, 6},
         {"random", 0, 7},
         {"floor", 1, 8},
-        {"toString", 1, -1},
-        {"toInt", 1, -1},
-        {"toFloat", 1, -1},
         {NULL, 0, -1}
 };
 

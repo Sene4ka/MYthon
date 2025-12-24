@@ -607,8 +607,15 @@ InstanceObject* vm_new_instance(VM* vm, ClassObject* klass) {
 }
 
 Value vm_call_native(VM* vm, NativeFn function, int arg_count) {
-    Value result = function(arg_count, &vm->stack[vm->sp - arg_count]);
-    vm->sp -= arg_count;
+    int callee_index = vm->sp - 1 - arg_count;
+    Value* args = NULL;
+    if (arg_count > 0) {
+        args = &vm->stack[callee_index + 1];
+    }
+
+    Value result = function(arg_count, args);
+
+    vm->sp = callee_index;
     vm_push(vm, result);
     return result;
 }
@@ -618,26 +625,35 @@ Value vm_call_value(VM* vm, Value callee, int arg_count) {
         NativeFunctionObject* nf = AS_NATIVE(callee);
         return vm_call_native(vm, nf->function, arg_count);
     }
+
     if (IS_CLOSURE(callee)) {
         ClosureObject* cl = AS_CLOSURE(callee);
         FunctionObject* fn = cl->function;
-        if (fn->bytecode == NULL) {
+        if (!fn->bytecode) {
             vm_runtime_error(vm, "Closure has no bytecode");
             return NIL_VAL;
         }
 
-        vm_push_frame_with_ip(vm,
-                              fn->bytecode,
-                              fn->local_count,
-                              fn->bytecode->code + fn->bytecode->functions[fn->func_index].code_start);
+        // стек: ..., callee, arg0..argN-1
+        int callee_index = vm->sp - 1 - arg_count;
 
+        // создаём новый фрейм
+        vm_push_frame_with_ip(
+            vm,
+            fn->bytecode,
+            fn->local_count,
+            fn->bytecode->code + fn->bytecode->functions[fn->func_index].code_start
+        );
         CallFrame* new_frame = &vm->frames[vm->frame_count - 1];
         new_frame->closure = cl;
 
-        for (int i = arg_count - 1; i >= 0; i--) {
-            Value v = vm_pop(vm);
-            vm_store_local(vm, i, v);
+        // args → локалы
+        for (int i = 0; i < arg_count; i++) {
+            vm_store_local(vm, i, vm->stack[callee_index + 1 + i]);
         }
+
+        // убрать callee + аргументы
+        vm->sp = callee_index;
 
         return NIL_VAL;
     }
@@ -806,8 +822,22 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
             case OP_DIV: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
-                if ((IS_INT(a) || IS_FLOAT(a)) &&
-                    (IS_INT(b) || IS_FLOAT(b))) {
+
+                if (!((IS_INT(a) || IS_FLOAT(a)) &&
+                      (IS_INT(b) || IS_FLOAT(b)))) {
+                    vm_runtime_error(vm, "DIV on non-numbers");
+                    return INTERPRET_RUNTIME_ERROR;
+                      }
+
+                if (IS_INT(a) && IS_INT(b)) {
+                    int64_t ia = AS_INT(a);
+                    int64_t ib = AS_INT(b);
+                    if (ib == 0) {
+                        vm_runtime_error(vm, "Division by zero");
+                        return INTERPRET_RUNTIME_ERROR;
+                    }
+                    vm_push(vm, INT_VAL(ia / ib));
+                } else {
                     double da = IS_INT(a) ? (double)AS_INT(a) : AS_FLOAT(a);
                     double db = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
                     if (db == 0.0) {
@@ -815,12 +845,10 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                         return INTERPRET_RUNTIME_ERROR;
                     }
                     vm_push(vm, FLOAT_VAL(da / db));
-                } else {
-                    vm_runtime_error(vm, "DIV on non-numbers");
-                    return INTERPRET_RUNTIME_ERROR;
                 }
                 break;
             }
+
             case OP_MOD: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
@@ -943,7 +971,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 ip += 2;
                 frame->ip = ip;
                 if (idx >= bytecode->const_count) {
-                    printf("const count: %llu, idx: %d\n", bytecode->const_count, idx);
                     vm_runtime_error(vm, "LOAD_CONST: bad index");
                     return INTERPRET_RUNTIME_ERROR;
                 }
@@ -1010,7 +1037,7 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
             case OP_JUMP_IF_FALSE_U16: {
                 int16_t offset = (int16_t)read_u16(ip);
                 ip += 2;
-                Value cond = vm_peek(vm, 0);
+                Value cond = vm_pop(vm);
                 if (!value_to_bool(cond)) {
                     ip += offset;
                 }
@@ -1020,7 +1047,7 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
             case OP_JUMP_IF_TRUE_U16: {
                 int16_t offset = (int16_t)read_u16(ip);
                 ip += 2;
-                Value cond = vm_peek(vm, 0);
+                Value cond = vm_pop(vm);
                 if (value_to_bool(cond)) {
                     ip += offset;
                 }
@@ -1039,45 +1066,49 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 }
                 frame->ip = ip;
 
-                Value callee = vm_peek(vm, argc);
+                int callee_index = vm->sp - 1 - argc;
+                Value callee = vm->stack[callee_index];
 
                 if (IS_NATIVE(callee)) {
-                    // Снять аргументы в массив
                     Value* args = NULL;
                     if (argc > 0) {
                         args = ALLOCATE(Value, argc);
-                        for (int i = argc - 1; i >= 0; i--) {
-                            args[i] = vm_pop(vm);
+                        // скопировать аргументы из стека, не меняя порядок
+                        for (int i = 0; i < argc; i++) {
+                            args[i] = vm->stack[callee_index + 1 + i];
                         }
                     }
-                    vm_pop(vm);
 
                     NativeFunctionObject* nf = AS_NATIVE(callee);
                     Value result = nf->function(argc, args);
 
                     if (argc > 0) FREE_ARRAY(Value, args, argc);
 
+                    // убрать callee + аргументы одним махом
+                    vm->sp = callee_index;
                     vm_push(vm, result);
                 } else if (IS_CLOSURE(callee)) {
                     ClosureObject* cl = AS_CLOSURE(callee);
                     FunctionObject* fn = cl->function;
 
-                    // Снимаем аргументы и callee одним блоком
-                    // стек сейчас: [..., callee, arg0, ..., argN-1]
+                    // сохранить аргументы во временный буфер
                     Value* args = NULL;
                     if (argc > 0) {
                         args = ALLOCATE(Value, argc);
-                        for (int i = argc - 1; i >= 0; i--) {
-                            args[i] = vm_pop(vm);
+                        for (int i = 0; i < argc; i++) {
+                            args[i] = vm->stack[callee_index + 1 + i];
                         }
                     }
-                    vm_pop(vm); // callee
 
-                    // создаём новый фрейм
-                    vm_push_frame_with_ip(vm,
-                                          fn->bytecode,
-                                          fn->local_count,
-                                          fn->bytecode->code + fn->bytecode->functions[fn->func_index].code_start);
+                    // убрать callee + аргументы
+                    vm->sp = callee_index;
+
+                    vm_push_frame_with_ip(
+                        vm,
+                        fn->bytecode,
+                        fn->local_count,
+                        fn->bytecode->code + fn->bytecode->functions[fn->func_index].code_start
+                    );
 
                     CallFrame* new_frame = &vm->frames[vm->frame_count - 1];
                     new_frame->closure = cl;
@@ -1088,7 +1119,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                     }
                     if (argc > 0) FREE_ARRAY(Value, args, argc);
 
-                    // переключаемся на новый фрейм
                     frame = new_frame;
                     ip = frame->ip;
                 } else {
