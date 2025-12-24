@@ -280,6 +280,7 @@ const char* vm_value_type_name(Value v) {
         case VAL_CLOSURE:  return "closure";
         case VAL_CLASS:    return "class";
         case VAL_INSTANCE: return "instance";
+        case VAL_UPVALUE:  return "upvalue";
         default:           return "unknown";
     }
 }
@@ -512,19 +513,19 @@ static void link_object(VM* vm, Object* obj, uint8_t type) {
 }
 
 void mark_value(VM* vm, Value v) {
+    printf("[DEBUG] mark value call");
     (void)vm;
     if (!IS_OBJECT(v)) return;
     mark_object(vm, AS_OBJECT(v));
 }
 
 void mark_object(VM* vm, Object* obj) {
+    printf("[DEBUG] mark obj call");
     if (obj == NULL || obj->marked) return;
     obj->marked = 1;
 
     switch (obj->type) {
         case VAL_STRING: {
-            // StringObject: только данные строки
-            // (chars не содержат других Value/Object)
             break;
         }
         case VAL_ARRAY: {
@@ -575,6 +576,12 @@ void mark_object(VM* vm, Object* obj) {
             }
             break;
         }
+        case VAL_UPVALUE: {
+            Upvalue* uv = (Upvalue*)obj;
+            if (uv->location) mark_value(vm, *uv->location);
+            mark_value(vm, uv->closed);
+            break;
+        }
         default:
             break;
     }
@@ -604,14 +611,13 @@ void vm_mark_roots(VM* vm) {
         }
     }
 
-    // Открытые upvalues
-    /*for (Upvalue* uv = vm->open_upvalues; uv != NULL; uv = uv->next) {
+    for (Upvalue* uv = vm->open_upvalues; uv != NULL; uv = uv->next) {
         mark_object(vm, (Object*)uv);
         if (uv->location) {
             mark_value(vm, *uv->location);
         }
         mark_value(vm, uv->closed);
-    }*/
+    }
 }
 
 void vm_collect_garbage(VM* vm) {
@@ -708,7 +714,7 @@ void vm_collect_garbage(VM* vm) {
                     vm_realloc(vm, inst, sizeof(InstanceObject), 0);
                     break;
                 }
-                default: {
+                case VAL_UPVALUE: {
                     Upvalue* uv = (Upvalue*)unreached;
                     vm_realloc(vm, uv, sizeof(Upvalue), 0);
                     break;
@@ -1109,6 +1115,42 @@ Value vm_call_value(VM* vm, Value callee, int arg_count) {
     return NIL_VAL;
 }
 
+static Upvalue* vm_capture_upvalue(VM* vm, Value* slot) {
+    Upvalue* prev = NULL;
+    Upvalue* uv = vm->open_upvalues;
+
+    // Список отсортирован по убыванию адресов location
+    while (uv && uv->location > slot) {
+        prev = uv;
+        uv = uv->next;
+    }
+
+    // Уже есть upvalue для этого слота
+    if (uv && uv->location == slot) return uv;
+
+    // Создаём новый
+    Upvalue* created = (Upvalue*)vm_realloc(vm, NULL, 0, sizeof(Upvalue));
+    link_object(vm, (Object*)created, VAL_UPVALUE);
+
+    created->location = slot;
+    created->closed = NIL_VAL;
+    created->next = uv;
+
+    if (prev) prev->next = created;
+    else vm->open_upvalues = created;
+
+    return created;
+}
+
+static void vm_close_upvalues(VM* vm, Value* last) {
+    while (vm->open_upvalues && vm->open_upvalues->location >= last) {
+        Upvalue* uv = vm->open_upvalues;
+        uv->closed = *uv->location;
+        uv->location = &uv->closed;
+        vm->open_upvalues = uv->next;
+    }
+}
+
 InterpretResult vm_interpret(VM* vm, const char* source) {
     (void)vm;
     (void)source;
@@ -1433,7 +1475,7 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                         break;
                     }
                     case CONST_CLOSURE: {
-                        v = INT_VAL((int64_t)c->closure.func_idx);
+                        v = INT_VAL((int64_t)idx);
                         break;
                     }
                     default:
@@ -1579,6 +1621,8 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 Value result = vm_pop(vm);
                 CallFrame* old_frame = &vm->frames[vm->frame_count - 1];
 
+                vm_close_upvalues(vm, &vm->stack[frame->slots_offset]);
+
                 vm->sp = old_frame->slots_offset;
 
                 vm_pop_frame(vm);
@@ -1589,7 +1633,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 }
 
                 vm_push(vm, result);
-                // восстановить текущий фрейм и ip
                 frame = &vm->frames[vm->frame_count - 1];
                 ip = frame->ip;
                 break;
@@ -1597,6 +1640,8 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
 
             case OP_RETURN_NIL: {
                 CallFrame* old_frame = &vm->frames[vm->frame_count - 1];
+
+                vm_close_upvalues(vm, &vm->stack[frame->slots_offset]);
 
                 vm->sp = old_frame->slots_offset;
 
@@ -1698,13 +1743,31 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
             case OP_NEW_CLOSURE: {
                 frame->ip = ip;
 
-                Value funVal = vm_pop(vm);
-                if (!IS_INT(funVal)) {
-                    vm_runtime_error(vm, "NEW_CLOSURE: expected function index on stack");
+                Value constVal = vm_pop(vm);
+                if (!IS_INT(constVal)) {
+                    vm_runtime_error(vm, "NEW_CLOSURE: expected const index on stack");
                     return INTERPRET_RUNTIME_ERROR;
                 }
-                uint16_t func_idx = (uint16_t)AS_INT(funVal);
 
+                int64_t raw = AS_INT(constVal);
+                if (raw < 0) {
+                    vm_runtime_error(vm, "NEW_CLOSURE: negative const index");
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+
+                size_t const_index = (size_t)raw;
+                if (const_index >= bytecode->const_count) {
+                    vm_runtime_error(vm, "NEW_CLOSURE: bad const index");
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+
+                Constant* c = &bytecode->constants[const_index];
+                if (c->type != CONST_CLOSURE) {
+                    vm_runtime_error(vm, "NEW_CLOSURE: expected CONST_CLOSURE");
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+
+                uint32_t func_idx = c->closure.func_idx;
                 if (func_idx >= bytecode->func_count) {
                     vm_runtime_error(vm, "NEW_CLOSURE: bad func index");
                     return INTERPRET_RUNTIME_ERROR;
@@ -1728,14 +1791,10 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                     UpvalueInfo* uinfo = &fmeta->upvalues[i];
                     if (uinfo->is_local) {
                         Value* slot = &vm->stack[frame->slots_offset + uinfo->location];
-                        Upvalue* uv = ALLOCATE(Upvalue, 1);
-                        link_object(vm, (Object*)uv, VAL_CLOSURE); // пока так
-                        uv->location = slot;
-                        uv->closed = NIL_VAL;
-                        uv->next = NULL;
-                        clo->upvalues[i] = uv;
+                        clo->upvalues[i] = vm_capture_upvalue(vm, slot);
                     } else {
-                        if (!frame->closure || uinfo->location >= frame->closure->upvalue_count) {
+                        if (!frame->closure ||
+                            uinfo->location >= frame->closure->upvalue_count) {
                             vm_runtime_error(vm, "NEW_CLOSURE: bad upvalue chain");
                             return INTERPRET_RUNTIME_ERROR;
                         }

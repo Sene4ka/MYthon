@@ -170,6 +170,8 @@ typedef struct {
     int frame_capacity;
     int frame_count;
 
+    Upvalue* open_upvalues;
+
     Value* globals;
     int global_capacity;
     int global_count;
@@ -179,13 +181,15 @@ typedef struct {
     Object* objects;
     size_t bytes_allocated;
     size_t next_gc;
-    int debug_gc;
 
     int error_count;
     const char* error_message;
     int line;
+
     int debug;
+    int debug_gc;
     DebugLevel debug_level;
+
     int exit_code;
 } VM;
 
