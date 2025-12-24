@@ -127,7 +127,7 @@ static Bytecode* compile_source(const char* source, const char* filename, int op
     Bytecode* bc = bytecode_new();
     Compiler compiler;
     compiler_init(&compiler, filename);
-    //compiler.debug = debug;
+    compiler.debug = debug;
 
     CompileResult result = compiler_compile(&compiler, ast, bc);
 
@@ -175,6 +175,9 @@ int run_file(CLIArgs args) {
         vm_set_debug(vm, 1);
         vm->debug_level = DEBUG_GLOBAL;
     }
+
+    vm->debug_gc = 1;
+    vm->next_gc = 1024;
 
     InterpretResult result = vm_run(vm, bc);
 

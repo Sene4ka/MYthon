@@ -15,14 +15,15 @@ typedef enum {
     VAL_NATIVE_FN,
     VAL_CLOSURE,
     VAL_CLASS,
-    VAL_INSTANCE
+    VAL_INSTANCE,
+    VAL_UPVALUE
 } ValueType;
 
 typedef enum {
     DEBUG_NONE   = 0,
-    DEBUG_OPS    = 1,  // ip + opcode
-    DEBUG_STACK  = 2,  // + стек и фреймы
-    DEBUG_GLOBAL = 3   // + глобалы и upvalues
+    DEBUG_OPS    = 1,
+    DEBUG_STACK  = 2,
+    DEBUG_GLOBAL = 3
 } DebugLevel;
 
 typedef struct Value Value;
@@ -178,6 +179,7 @@ typedef struct {
     Object* objects;
     size_t bytes_allocated;
     size_t next_gc;
+    int debug_gc;
 
     int error_count;
     const char* error_message;
@@ -259,5 +261,8 @@ InstanceObject* vm_new_instance(VM* vm, ClassObject* klass);
 /* GC */
 void vm_mark_roots(VM* vm);
 void vm_collect_garbage(VM* vm);
+void mark_value(VM* vm, Value v);
+void mark_object(VM* vm, Object* obj);
+
 
 #endif /* MYTHON_VM_H */
