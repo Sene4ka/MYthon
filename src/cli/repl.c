@@ -78,7 +78,7 @@ static Bytecode* compile_source(VM* vm, const char* source, const char* filename
     }
 
     if (show_bytecode) {
-        bc_disassemble(bc);
+        bc_disassemble(bc, "<repl>");
     }
 
     ast_free(ast);

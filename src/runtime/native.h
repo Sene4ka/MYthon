@@ -10,6 +10,7 @@ typedef struct {
 } NativeInfo;
 
 NativeInfo* native_get_info(const char* name);
+int native_count(void);
 
 int native_is_native(const char* name);
 int native_get_global_index(const char* name);

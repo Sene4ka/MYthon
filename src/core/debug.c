@@ -1,146 +1,170 @@
 #include "debug.h"
-#include "utils/memory.h"
 #include <stdio.h>
-#include <stdint.h>
 
-void disassemble_instruction(const Bytecode* bc, size_t offset) {
-    if (offset >= bc->length) {
+static int disassemble_instruction_internal(const Bytecode* bc, size_t offset) {
+    if (offset >= bc->code_size) {
         printf("Ошибка: offset за пределами кода\n");
-        return;
+        return (int)offset;
     }
 
-    uint8_t* ip = bc->code + offset;
-    uint8_t op = *ip;
+    const uint8_t* ip = bc->code + offset;
+    OpCode op = (OpCode)*ip;
 
     printf("%04zu ", offset);
 
-    int line = 0;
-    if (offset < bc->length && bc->line_numbers) {
+    int line = -1;
+    if (bc->line_numbers && offset < bc->code_size) {
         line = bc->line_numbers[offset];
-        printf("%4d ", line);
-    } else {
-        printf("   - ");
     }
+    if (line >= 0) printf("%4d ", line);
+    else           printf("   - ");
 
     switch (op) {
-        case OP_NOP: printf("NOP"); break;
-        case OP_HALT: printf("HALT"); break;
-        case OP_ADD: printf("ADD"); break;
-        case OP_SUB: printf("SUB"); break;
-        case OP_MUL: printf("MUL"); break;
-        case OP_DIV: printf("DIV"); break;
-        case OP_MOD: printf("MOD"); break;
-        case OP_NEG: printf("NEG"); break;
-        case OP_NOT: printf("NOT"); break;
-        case OP_EQ: printf("EQ"); break;
-        case OP_NEQ: printf("NEQ"); break;
-        case OP_LT: printf("LT"); break;
-        case OP_LE: printf("LE"); break;
-        case OP_GT: printf("GT"); break;
-        case OP_GE: printf("GE"); break;
-        case OP_AND: printf("AND"); break;
-        case OP_OR: printf("OR"); break;
+        /* stack/arith/logical */
+        case OP_NOP:  printf("NOP"); return (int)(offset + 1);
+        case OP_HALT: printf("HALT"); return (int)(offset + 1);
 
-        case OP_PUSH_I8: printf("PUSH_I8 %d", (int8_t)ip[1]); break;
-        case OP_PUSH_NIL: printf("PUSH_NIL"); break;
-        case OP_PUSH_TRUE: printf("PUSH_TRUE"); break;
-        case OP_PUSH_FALSE: printf("PUSH_FALSE"); break;
-        case OP_STORE_LOCAL_8: printf("STORE_LOCAL_8 %d", (uint8_t)ip[1]); break;
-        case OP_LOAD_LOCAL_8: printf("LOAD_LOCAL_8 %d", (uint8_t)ip[1]); break;
-        case OP_JUMP_8: printf("JUMP_8 %d", (int8_t)ip[1]); break;
-        case OP_JUMP_IF_TRUE_8: printf("JUMP_IF_TRUE_8 %d", (int8_t)ip[1]); break;
-        case OP_JUMP_IF_FALSE_8: printf("JUMP_IF_FALSE_8 %d", (int8_t)ip[1]); break;
-        case OP_POP: printf("POP"); break;
+        case OP_ADD:  printf("ADD");  return (int)(offset + 1);
+        case OP_SUB:  printf("SUB");  return (int)(offset + 1);
+        case OP_MUL:  printf("MUL");  return (int)(offset + 1);
+        case OP_DIV:  printf("DIV");  return (int)(offset + 1);
+        case OP_MOD:  printf("MOD");  return (int)(offset + 1);
 
-        case OP_PUSH_I16: {
-            int16_t val = (ip[1] << 8) | ip[2];
-            printf("PUSH_I16 %d", val);
-            break;
-        }
-        case OP_STORE_LOCAL_16: {
-            int16_t val = (ip[1] << 8) | ip[2];
-            printf("STORE_LOCAL_16 %d", val);
-            break;
-        }
-        case OP_LOAD_LOCAL_16: {
-            int16_t val = (ip[1] << 8) | ip[2];
-            printf("LOAD_LOCAL_16 %d", val);
-            break;
-        }
-        case OP_JUMP_16: {
-            int16_t val = (ip[1] << 8) | ip[2];
-            printf("JUMP_16 %d", val);
-            break;
-        }
-        case OP_JUMP_IF_TRUE_16: {
-            int16_t val = (ip[1] << 8) | ip[2];
-            printf("JUMP_IF_TRUE_16 %d", val);
-            break;
-        }
-        case OP_JUMP_IF_FALSE_16: {
-            int16_t val = (ip[1] << 8) | ip[2];
-            printf("JUMP_IF_FALSE_16 %d", val);
-            break;
-        }
-        case OP_CALL_8: printf("CALL_8 %d", (uint8_t)ip[1]); break;
+        case OP_NEG:  printf("NEG");  return (int)(offset + 1);
+        case OP_NOT:  printf("NOT");  return (int)(offset + 1);
+        case OP_DUP:  printf("DUP");  return (int)(offset + 1);
+        case OP_POP:  printf("POP");  return (int)(offset + 1);
 
-        case OP_PUSH_I32: {
-            int32_t val = (ip[1] << 24) | (ip[2] << 16) | (ip[3] << 8) | ip[4];
-            printf("PUSH_I32 %d", val);
-            break;
-        }
-        case OP_PUSH_F32: {
-            union {
-                uint32_t i;
-                float f;
-            } u;
-            u.i = (ip[1] << 24) | (ip[2] << 16) | (ip[3] << 8) | ip[4];
-            printf("PUSH_F32 %g", u.f);
-            break;
-        }
-        case OP_JUMP_32: {
-            int32_t val = (ip[1] << 24) | (ip[2] << 16) | (ip[3] << 8) | ip[4];
-            printf("JUMP_32 %d", val);
-            break;
-        }
-        case OP_CALL_16: {
-            int16_t val = (ip[1] << 8) | ip[2];
-            printf("CALL_16 %d", val);
-            break;
-        }
-        case OP_LOAD_CONST: {
-            int32_t idx = (ip[1] << 24) | (ip[2] << 16) | (ip[3] << 8) | ip[4];
-            printf("LOAD_CONST %d", idx);
-            break;
+        case OP_EQ:   printf("EQ");   return (int)(offset + 1);
+        case OP_NEQ:  printf("NEQ");  return (int)(offset + 1);
+        case OP_LT:   printf("LT");   return (int)(offset + 1);
+        case OP_LE:   printf("LE");   return (int)(offset + 1);
+        case OP_GT:   printf("GT");   return (int)(offset + 1);
+        case OP_GE:   printf("GE");   return (int)(offset + 1);
+        case OP_AND:  printf("AND");  return (int)(offset + 1);
+        case OP_OR:   printf("OR");   return (int)(offset + 1);
+
+        /* constants */
+        case OP_LOAD_CONST_U16: {
+            uint16_t idx = (uint16_t)(ip[1] << 8 | ip[2]);
+            printf("LOAD_CONST_U16 %u", idx);
+            return (int)(offset + 3);
         }
 
-        case OP_ARRAY_NEW: printf("ARRAY_NEW"); break;
-        case OP_ARRAY_GET: printf("ARRAY_GET"); break;
-        case OP_ARRAY_SET: printf("ARRAY_SET"); break;
-        case OP_ARRAY_LEN: printf("ARRAY_LEN"); break;
+        /* locals/upvalues */
+        case OP_LOAD_LOCAL_U8: {
+            uint8_t idx = ip[1];
+            printf("LOAD_LOCAL_U8 %u", idx);
+            return (int)(offset + 2);
+        }
+        case OP_STORE_LOCAL_U8: {
+            uint8_t idx = ip[1];
+            printf("STORE_LOCAL_U8 %u", idx);
+            return (int)(offset + 2);
+        }
+        case OP_LOAD_UPVALUE_U8: {
+            uint8_t idx = ip[1];
+            printf("LOAD_UPVALUE_U8 %u", idx);
+            return (int)(offset + 2);
+        }
+        case OP_STORE_UPVALUE_U8: {
+            uint8_t idx = ip[1];
+            printf("STORE_UPVALUE_U8 %u", idx);
+            return (int)(offset + 2);
+        }
 
-        case OP_CALL_NATIVE: printf("CALL_NATIVE"); break;
-        case OP_RETURN: printf("RETURN"); break;
-        case OP_RETURN_NIL: printf("RETURN_NIL"); break;
+        /* jumps */
+        case OP_JUMP_U16:
+        case OP_JUMP_IF_FALSE_U16:
+        case OP_JUMP_IF_TRUE_U16: {
+            uint16_t off = (uint16_t)(ip[1] << 8 | ip[2]);
+            const char* name =
+                (op == OP_JUMP_U16) ? "JUMP_U16" :
+                (op == OP_JUMP_IF_FALSE_U16) ? "JUMP_IF_FALSE_U16" :
+                                               "JUMP_IF_TRUE_U16";
+            printf("%s %d", name, (int16_t)off);
+            return (int)(offset + 3);
+        }
 
-        case OP_PRINT: printf("PRINT"); break;
-        case OP_DUP: printf("DUP"); break;
+        /* calls */
+        case OP_CALL_U8: {
+            uint8_t argc = ip[1];
+            printf("CALL_U8 %u", argc);
+            return (int)(offset + 2);
+        }
+        case OP_CALL_U16: {
+            uint16_t argc = (uint16_t)(ip[1] << 8 | ip[2]);
+            printf("CALL_U16 %u", argc);
+            return (int)(offset + 3);
+        }
 
-        case OP_BREAK: printf("BREAK"); break;
+        case OP_RETURN:     printf("RETURN");     return (int)(offset + 1);
+        case OP_RETURN_NIL: printf("RETURN_NIL"); return (int)(offset + 1);
 
-        default: printf("UNKNOWN_%02X", op); break;
+        /* closures/classes */
+        case OP_NEW_CLOSURE: printf("NEW_CLOSURE"); return (int)(offset + 1);
+        case OP_NEW_CLASS:   printf("NEW_CLASS");   return (int)(offset + 1);
+
+        case OP_LOAD_FIELD_U8: {
+            uint8_t idx = ip[1];
+            printf("LOAD_FIELD_U8 %u", idx);
+            return (int)(offset + 2);
+        }
+        case OP_STORE_FIELD_U8: {
+            uint8_t idx = ip[1];
+            printf("STORE_FIELD_U8 %u", idx);
+            return (int)(offset + 2);
+        }
+        case OP_CALL_METHOD_U8: {
+            uint8_t argc = ip[1];
+            printf("CALL_METHOD_U8 %u", argc);
+            return (int)(offset + 2);
+        }
+
+        /* arrays */
+        case OP_ARRAY_NEW_U8: {
+            uint8_t count = ip[1];
+            printf("ARRAY_NEW_U8 %u", count);
+            return (int)(offset + 2);
+        }
+        case OP_ARRAY_GET: printf("ARRAY_GET"); return (int)(offset + 1);
+        case OP_ARRAY_SET: printf("ARRAY_SET"); return (int)(offset + 1);
+        case OP_ARRAY_LEN: printf("ARRAY_LEN"); return (int)(offset + 1);
+
+        /* globals */
+        case OP_LOAD_GLOBAL_U16: {
+            uint16_t idx = (uint16_t)(ip[1] << 8 | ip[2]);
+            printf("LOAD_GLOBAL_U16 %u", idx);
+            return (int)(offset + 3);
+        }
+        case OP_STORE_GLOBAL_U16: {
+            uint16_t idx = (uint16_t)(ip[1] << 8 | ip[2]);
+            printf("STORE_GLOBAL_U16 %u", idx);
+            return (int)(offset + 3);
+        }
+
+        /* misc */
+        case OP_PRINT: printf("PRINT"); return (int)(offset + 1);
+        case OP_BREAK: printf("BREAK"); return (int)(offset + 1);
+
+        default:
+            printf("UNKNOWN_0x%02X", (unsigned)op);
+            return (int)(offset + 1);
     }
+}
 
+void disassemble_instruction(const Bytecode* bc, size_t offset) {
+    disassemble_instruction_internal(bc, offset);
     printf("\n");
 }
 
 void disassemble_bytecode(const Bytecode* bc) {
-    printf("=== Байт-код (%zu байт) ===\n", bc->length);
+    printf("=== Байт-код (%zu байт) ===\n", bc->code_size);
 
     size_t offset = 0;
-    while (offset < bc->length) {
-        disassemble_instruction(bc, offset);
-        offset += 1 + opcode_operand_length[bc->code[offset]];
+    while (offset < bc->code_size) {
+        offset = (size_t)disassemble_instruction_internal(bc, offset);
+        printf("\n");
     }
 
     printf("=== Константы (%zu) ===\n", bc->const_count);
@@ -148,66 +172,26 @@ void disassemble_bytecode(const Bytecode* bc) {
         const Constant* c = &bc->constants[i];
         printf("%4zu: ", i);
         switch (c->type) {
-            case CONST_INT: printf("INT %lld", (long long)c->int_val); break;
-            case CONST_FLOAT: printf("FLOAT %g", c->float_val); break;
-            case CONST_STRING: printf("STRING \"%s\"", c->str_val); break;
-            case CONST_FUNCTION: printf("FUNCTION %p", c->ptr_val); break;
-            case CONST_NATIVE_FN: printf("NATIVE_FN %p", c->ptr_val); break;
-            default: printf("UNKNOWN"); break;
+            case CONST_INT:
+                printf("INT %lld", (long long)c->int_val);
+                break;
+            case CONST_FLOAT:
+                printf("FLOAT %g", c->float_val);
+                break;
+            case CONST_STRING:
+                printf("STRING \"%s\"", c->str_val);
+                break;
+            case CONST_CLOSURE:
+                printf("CLOSURE func=%u upvalues=%u",
+                       c->closure.func_idx, c->closure.upvalue_count);
+                break;
+            case CONST_CLASS:
+                printf("CLASS idx=%u", c->class_ref.class_idx);
+                break;
+            case CONST_NATIVE_FN:
+                printf("NATIVE_FN %p", c->native_ptr);
+                break;
         }
         printf("\n");
     }
-}
-
-void dump_stack(const VM* vm) {
-    printf("=== Стек (sp=%d, size=%d) ===\n", vm->sp, vm->stack_size);
-
-    for (int i = 0; i < vm->sp; i++) {
-        printf("[%d] ", i);
-        vm_print_value(vm->stack[i]);
-        printf("\n");
-    }
-
-    if (vm->sp == 0) {
-        printf("(пусто)\n");
-    }
-}
-
-void dump_frames(const VM* vm) {
-    printf("=== Фреймы (%d) ===\n", vm->frame_count);
-
-    for (int i = 0; i < vm->frame_count; i++) {
-        const CallFrame* frame = &vm->frames[i];
-        printf("Фрейм %d: ip=%p, slots=%d\n",
-               i, (void*)(frame->ip - frame->bytecode->code), frame->slot_count);
-    }
-}
-
-void dump_globals(const VM* vm) {
-    printf("=== Глобальные (%d) ===\n", vm->global_count);
-
-    for (int i = 0; i < vm->global_count; i++) {
-        if (!IS_NIL(vm->globals[i])) {
-            printf("[%d] ", i);
-            vm_print_value(vm->globals[i]);
-            printf("\n");
-        }
-    }
-}
-
-void trace_execution(const VM* vm, const uint8_t* ip) {
-    if (vm->frame_count == 0) return;
-
-    const CallFrame* frame = &vm->frames[vm->frame_count - 1];
-    size_t offset = ip - frame->bytecode->code;
-
-    printf("Выполнение: offset=%zu, sp=%d | ", offset, vm->sp);
-
-    if (vm->sp > 0) {
-        vm_print_value(vm_peek((VM*)vm, 0));
-    } else {
-        printf("(пусто)");
-    }
-
-    printf("\n");
 }

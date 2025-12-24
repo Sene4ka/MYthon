@@ -32,6 +32,14 @@ NativeInfo* native_get_info(const char* name) {
     return NULL;
 }
 
+int native_count(void) {
+    int count = 0;
+    for (int i = 0; native_functions[i].name != NULL; i++) {
+        count++;
+    }
+    return count;
+}
+
 int native_is_native(const char* name) {
     return native_get_info(name) != NULL;
 }
