@@ -107,7 +107,7 @@ void print_version(void) {
     printf("Mython 0.1.0\n");
 }
 
-static Bytecode* compile_source(const char* source, const char* filename, int optimize) {
+static Bytecode* compile_source(const char* source, const char* filename, int optimize, int debug) {
     Lexer lexer;
     lexer_init(&lexer, (const unsigned char*)source);
 
@@ -122,11 +122,16 @@ static Bytecode* compile_source(const char* source, const char* filename, int op
         return NULL;
     }
 
+    if (debug) ast_print(ast, 0);
+
     Bytecode* bc = bytecode_new();
     Compiler compiler;
     compiler_init(&compiler, filename);
 
+
+    fprintf(stderr, "DEBUG: start compile %s\n", filename);
     CompileResult result = compiler_compile(&compiler, ast, bc);
+    fprintf(stderr, "DEBUG: end compile, result=%d\n", result);
 
     if (result != COMPILE_SUCCESS) {
         fprintf(stderr, "Compilation failed\n");
@@ -155,20 +160,23 @@ int run_file(CLIArgs args) {
         printf("Compiling %s...\n", args.input_file);
     }
 
-    Bytecode* bc = compile_source(source, args.input_file, args.optimize);
+    Bytecode* bc = compile_source(source, args.input_file, args.optimize, args.debug);
     if (!bc) {
         free(source);
         return 1;
     }
 
     if (args.disassemble) {
-        bc_disassemble(bc);
+        bc_disassemble(bc, args.input_file);
     }
 
     VM* vm = vm_new();
     native_register_all(vm);
 
-    if (args.debug) vm_set_debug(vm, 1);
+    if (args.debug) {
+        vm_set_debug(vm, 1);
+        vm->debug_level = DEBUG_GLOBAL;
+    }
 
     InterpretResult result = vm_run(vm, bc);
 
@@ -193,18 +201,18 @@ int compile_file(CLIArgs args) {
         return 1;
     }
 
-    Bytecode* bc = compile_source(source, args.input_file, args.optimize);
+    Bytecode* bc = compile_source(source, args.input_file, args.optimize, args.debug);
     if (!bc) {
         free(source);
         return 1;
     }
 
     if (args.disassemble) {
-        bc_disassemble(bc);
+        bc_disassemble(bc, args.input_file);
     }
 
     const char* output = args.output_file ? args.output_file : "output.cmth";
-    int success = bc_save_to_file(bc, output);
+    int success = bytecode_save(bc, output);
 
     if (success) {
         printf("Compiled to %s\n", output);
@@ -230,19 +238,19 @@ int start_repl(CLIArgs args) {
 }
 
 int disassemble_file(CLIArgs args) {
-    Bytecode* bc = bc_load_from_file(args.input_file);
+    Bytecode* bc = bytecode_load(args.input_file);
     if (!bc) {
         fprintf(stderr, "Failed to load file: %s\n", args.input_file);
         return 1;
     }
 
-    bc_disassemble(bc);
+    bc_disassemble(bc, args.input_file);
     bytecode_free(bc);
     return 0;
 }
 
 int exec_bytecode_file(CLIArgs args) {
-    Bytecode* bc = bc_load_from_file(args.input_file);
+    Bytecode* bc = bytecode_load(args.input_file);
     if (!bc) {
         fprintf(stderr, "Failed to load bytecode: %s\n", args.input_file);
         return 1;
