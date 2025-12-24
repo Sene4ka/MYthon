@@ -15,8 +15,7 @@ typedef enum {
     VAL_NATIVE_FN,
     VAL_CLOSURE,
     VAL_CLASS,
-    VAL_INSTANCE,
-    VAL_UPVALUE,
+    VAL_INSTANCE
 } ValueType;
 
 typedef enum {
@@ -126,7 +125,6 @@ typedef struct InstanceObject {
 #define IS_CLOSURE(value)    ((value).type == VAL_CLOSURE)
 #define IS_CLASS(value)      ((value).type == VAL_CLASS)
 #define IS_INSTANCE(value)   ((value).type == VAL_INSTANCE)
-#define IS_UPVALUE(value)    ((value).type == VAL_UPVALUE)
 #define IS_OBJECT(value)     ((value).type >= VAL_STRING)
 
 #define AS_BOOL(value)       ((value).as.boolean)
@@ -140,7 +138,6 @@ typedef struct InstanceObject {
 #define AS_CLOSURE(value)    ((ClosureObject*)AS_OBJECT(value))
 #define AS_CLASS(value)      ((ClassObject*)AS_OBJECT(value))
 #define AS_INSTANCE(value)   ((InstanceObject*)AS_OBJECT(value))
-#define AS_UPVALUE(value)    ((Upvalue*)AS_OBJECT(value))
 
 #define BOOL_VAL(b)          ((Value){VAL_BOOL,   {.boolean = (b)}})
 #define INT_VAL(i)           ((Value){VAL_INT,    {.integer = (i)}})
@@ -181,8 +178,6 @@ typedef struct {
     Object* objects;
     size_t bytes_allocated;
     size_t next_gc;
-
-    Upvalue* open_upvalues;
 
     int error_count;
     const char* error_message;

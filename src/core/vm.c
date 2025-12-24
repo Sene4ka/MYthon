@@ -280,7 +280,6 @@ const char* vm_value_type_name(Value v) {
         case VAL_CLOSURE:  return "closure";
         case VAL_CLASS:    return "class";
         case VAL_INSTANCE: return "instance";
-        case VAL_UPVALUE: return "upvalue";
         default:           return "unknown";
     }
 }
@@ -330,8 +329,6 @@ VM* vm_new(void) {
     vm->bytes_allocated = 0;
     vm->next_gc = 1024 * 1024;
 
-    vm->open_upvalues = NULL;
-
     vm->error_count = 0;
     vm->error_message = NULL;
     vm->line = 0;
@@ -354,51 +351,6 @@ void vm_free(VM* vm) {
     // когда будет реализован GC.
 
     free_ptr(vm);
-}
-
-static void link_object(VM* vm, Object* obj, uint8_t type) {
-    obj->type = type;
-    obj->marked = 0;
-    obj->next = vm->objects;
-    vm->objects = obj;
-}
-
-static Upvalue* vm_capture_upvalue(VM* vm, Value* slot) {
-    fprintf(stderr, "[CAPTURE] slot=%p before value_type=%d\n",
-        (void*)slot, slot ? (int)slot->type : -1);
-    Upvalue* prev = NULL;
-    Upvalue* uv = vm->open_upvalues;
-
-    while (uv && uv->location > slot) {
-        prev = uv;
-        uv = uv->next;
-    }
-
-    if (uv && uv->location == slot) return uv;
-
-    Upvalue* created = ALLOCATE(Upvalue, 1);
-    link_object(vm, (Object*)created, VAL_UPVALUE);
-    created->location = slot;
-    created->closed = NIL_VAL;
-    created->next = uv;
-
-    if (prev) prev->next = created;
-    else vm->open_upvalues = created;
-
-    return created;
-}
-
-static void vm_close_upvalues(VM* vm, Value* last) {
-    Upvalue* uv = vm->open_upvalues;
-    while (uv && uv->location >= last) {
-        fprintf(stderr, "[CLOSE] uv=%p loc=%p type_before=%d\n",
-                (void*)uv, (void*)uv->location, uv->location ? (int)uv->location->type : -1);
-        uv->closed = *uv->location;
-        uv->location = &uv->closed;
-        fprintf(stderr, "[CLOSE] uv=%p new_loc=%p type_after=%d\n",
-                (void*)uv, (void*)uv->location, uv->location->type);
-        uv = uv->next;
-    }
 }
 
 void vm_push(VM* vm, Value value) {
@@ -511,6 +463,13 @@ void vm_runtime_error(VM* vm, const char* format, ...) {
 
     vm->error_count++;
     vm->exit_code = 1;
+}
+
+static void link_object(VM* vm, Object* obj, uint8_t type) {
+    obj->type = type;
+    obj->marked = 0;
+    obj->next = vm->objects;
+    vm->objects = obj;
 }
 
 StringObject* vm_take_string(VM* vm, char* chars, int length) {
@@ -918,27 +877,23 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 }
                 break;
             }
-
             case OP_NOT: {
                 Value v = vm_pop(vm);
                 vm_push(vm, BOOL_VAL(!value_to_bool(v)));
                 break;
             }
-
             case OP_EQ: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
                 vm_push(vm, BOOL_VAL(vm_values_equal(a, b)));
                 break;
             }
-
             case OP_NEQ: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
                 vm_push(vm, BOOL_VAL(!vm_values_equal(a, b)));
                 break;
             }
-
             case OP_LT: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
@@ -953,7 +908,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 }
                 break;
             }
-
             case OP_LE: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
@@ -968,7 +922,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 }
                 break;
             }
-
             case OP_GT: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
@@ -983,7 +936,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 }
                 break;
             }
-
             case OP_GE: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
@@ -998,14 +950,12 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 }
                 break;
             }
-
             case OP_AND: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
                 vm_push(vm, BOOL_VAL(value_to_bool(a) && value_to_bool(b)));
                 break;
             }
-
             case OP_OR: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
@@ -1053,7 +1003,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 vm_push(vm, vm_load_local(vm, (int)idx));
                 break;
             }
-
             case OP_STORE_LOCAL_U8: {
                 uint8_t idx = *ip++;
                 frame->ip = ip;
@@ -1117,13 +1066,14 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 }
                 frame->ip = ip;
 
-                Value callee = vm_peek(vm, argc);
                 int callee_index = vm->sp - 1 - argc;
+                Value callee = vm->stack[callee_index];
 
                 if (IS_NATIVE(callee)) {
                     Value* args = NULL;
                     if (argc > 0) {
                         args = ALLOCATE(Value, argc);
+                        // скопировать аргументы из стека, не меняя порядок
                         for (int i = 0; i < argc; i++) {
                             args[i] = vm->stack[callee_index + 1 + i];
                         }
@@ -1172,14 +1122,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                     frame = new_frame;
                     ip = frame->ip;
                 } else {
-                    fprintf(stderr, "[CALL] argc=%d callee_index=%d type=%s\n",
-                        argc, callee_index, vm_value_type_name(callee));
-                    debug_print_stack(vm);
-                    debug_print_frames(vm);
-                    debug_print_locals(vm);
-                    debug_print_upvalues(vm);
-                    fprintf(stderr, "[CALL] argc=%d callee_index=%d type_enum=%d addr=%p\n",
-                            argc, callee_index, callee.type, (void*)&vm->stack[callee_index]);
                     vm_runtime_error(vm, "Attempt to call non-callable value");
                     return INTERPRET_RUNTIME_ERROR;
                 }
@@ -1189,8 +1131,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
             case OP_RETURN: {
                 Value result = vm_pop(vm);
                 CallFrame* old_frame = &vm->frames[vm->frame_count - 1];
-
-                vm_close_upvalues(vm, &vm->stack[old_frame->slots_offset]);
 
                 vm->sp = old_frame->slots_offset;
 
@@ -1202,6 +1142,7 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 }
 
                 vm_push(vm, result);
+                // восстановить текущий фрейм и ip
                 frame = &vm->frames[vm->frame_count - 1];
                 ip = frame->ip;
                 break;
@@ -1209,8 +1150,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
 
             case OP_RETURN_NIL: {
                 CallFrame* old_frame = &vm->frames[vm->frame_count - 1];
-
-                vm_close_upvalues(vm, &vm->stack[old_frame->slots_offset]);
 
                 vm->sp = old_frame->slots_offset;
 
@@ -1238,7 +1177,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 vm_push(vm, OBJECT_VAL(arr));
                 break;
             }
-
             case OP_ARRAY_GET: {
                 Value index = vm_pop(vm);
                 Value array = vm_pop(vm);
@@ -1255,7 +1193,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 vm_push(vm, arr->items[idx]);
                 break;
             }
-
             case OP_ARRAY_SET: {
                 Value value = vm_pop(vm);
                 Value index = vm_pop(vm);
@@ -1274,7 +1211,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 vm_push(vm, value);
                 break;
             }
-
             case OP_ARRAY_LEN: {
                 Value array = vm_pop(vm);
                 if (!IS_ARRAY(array)) {
@@ -1345,25 +1281,13 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                     UpvalueInfo* uinfo = &fmeta->upvalues[i];
                     if (uinfo->is_local) {
                         Value* slot = &vm->stack[frame->slots_offset + uinfo->location];
-
-                        fprintf(stderr, "[NEW_CLOSURE] func=%s func_idx=%d up[%d]: is_local=1 loc=%d "
-                                "slot_offset=%d slot=%p type=%d\n",
-                                fn_obj->name,
-                                fn_obj->func_index,
-                                i,
-                                uinfo->location,
-                                frame->slots_offset,
-                                (void*)slot,
-                                slot ? (int)slot->type : -1);
-
-                        clo->upvalues[i] = vm_capture_upvalue(vm, slot);
+                        Upvalue* uv = ALLOCATE(Upvalue, 1);
+                        link_object(vm, (Object*)uv, VAL_CLOSURE); // пока так
+                        uv->location = slot;
+                        uv->closed = NIL_VAL;
+                        uv->next = NULL;
+                        clo->upvalues[i] = uv;
                     } else {
-                        fprintf(stderr, "[NEW_CLOSURE] func=%s func_idx=%d up[%d]: is_local=0 loc=%d\n",
-                                fn_obj->name,
-                                fn_obj->func_index,
-                                i,
-                                uinfo->location);
-
                         if (!frame->closure || uinfo->location >= frame->closure->upvalue_count) {
                             vm_runtime_error(vm, "NEW_CLOSURE: bad upvalue chain");
                             return INTERPRET_RUNTIME_ERROR;
@@ -1489,9 +1413,7 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                     return INTERPRET_RUNTIME_ERROR;
                 }
                 Upvalue* uv = frame->closure->upvalues[idx];
-                Value v = uv ? *uv->location : NIL_VAL;
-                //fprintf(stderr, "[LOAD_UPVALUE] idx=%d type=%s\n", idx, vm_value_type_name(v));
-                vm_push(vm, v);
+                vm_push(vm, uv ? *uv->location : NIL_VAL);
                 break;
             }
 
@@ -1511,7 +1433,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 *uv->location = v;
                 break;
             }
-
             default:
                 vm_runtime_error(vm, "Unknown opcode %d", opcode);
                 return INTERPRET_RUNTIME_ERROR;

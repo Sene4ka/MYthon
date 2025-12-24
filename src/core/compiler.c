@@ -978,18 +978,6 @@ CompileResult compile_assign(Compiler* compiler, const ASTNode* node, Bytecode* 
             return COMPILE_SUCCESS;
         }
 
-        FunctionState* fs = current_function_state(compiler);
-        if (fs && fs->scope_depth > 0) {
-            int idx = compiler_add_local(compiler, name, length);
-            if (idx < 0 || idx > 0xFF) {
-                compiler_error_at_line(compiler, node->line, "Too many locals");
-                return COMPILE_ERROR;
-            }
-            emit_op(compiler, bc, OP_STORE_LOCAL_U8);
-            emit_u8(compiler, bc, (uint8_t)idx);
-            return COMPILE_SUCCESS;
-        }
-
         /* 3) глобал */
         char buf[256];
         int name_len = length < (int)sizeof(buf)-1 ? length : (int)sizeof(buf)-1;
@@ -1309,6 +1297,9 @@ CompileResult compile_if(Compiler* compiler, const ASTNode* node, Bytecode* byte
     patch_jump_u16(bc, else_jump);
 
     if (node->if_stmt.else_branch) {
+        // 5. ELSE-ветка: убрать условие
+        compiler_debug_log(compiler, "  if: ELSE POP cond");
+
         compiler_debug_log(compiler, "  if: ELSE branch");
         r = compile_statement(compiler, node->if_stmt.else_branch, bytecode);
         if (r != COMPILE_SUCCESS) {
@@ -1318,6 +1309,8 @@ CompileResult compile_if(Compiler* compiler, const ASTNode* node, Bytecode* byte
 
         compiler_debug_log(compiler, "  if: patch end_jump at %zu", end_jump);
         patch_jump_u16(bc, end_jump);
+    } else {
+        compiler_debug_log(compiler, "  if: no ELSE, POP cond in false branch");
     }
 
     compiler_debug_log(compiler, "compile_if: done line=%d", node->line);
