@@ -349,7 +349,7 @@ void vm_free(VM* vm) {
     FREE_ARRAY(Value, vm->globals, vm->global_capacity);
     FREE_ARRAY(Value, vm->constants.values, vm->constants.capacity);
 
-    //vm_collect_garbage(vm);
+    vm_collect_garbage(vm);
 
     free_ptr(vm);
 }
@@ -386,7 +386,14 @@ void vm_push_frame(VM* vm, Bytecode* bytecode, int slot_count) {
     vm_push_frame_with_ip(vm, bytecode, slot_count, bytecode->code);
 }
 
-void vm_push_frame_with_ip(VM* vm, Bytecode* bytecode, int slot_count, uint8_t* ip_start) {
+void vm_push_frame_with_ip(VM* vm, Bytecode* bytecode,
+                           int slot_count, uint8_t* ip_start) {
+    vm_push_frame_with_ip_at(vm, bytecode, slot_count, ip_start, vm->sp);
+}
+
+void vm_push_frame_with_ip_at(VM* vm, Bytecode* bytecode,
+                              int slot_count, uint8_t* ip_start,
+                              int slots_offset) {
     if (vm->frame_count >= vm->frame_capacity) {
         int old = vm->frame_capacity;
         int new_cap = old * 2;
@@ -398,11 +405,14 @@ void vm_push_frame_with_ip(VM* vm, Bytecode* bytecode, int slot_count, uint8_t* 
     frame->bytecode = bytecode;
     frame->ip = ip_start;
 
-    frame->slots_offset = vm->sp;
+    frame->slots_offset = slots_offset;
     frame->slot_count = slot_count;
     frame->closure = NULL;
 
-    for (int i = 0; i < slot_count; i++) {
+    if (vm->sp < slots_offset) vm->sp = slots_offset;
+
+    int needed = slots_offset + slot_count;
+    while (vm->sp < needed) {
         vm_push(vm, NIL_VAL);
     }
 }
@@ -480,7 +490,7 @@ static void* vm_realloc(VM* vm, void* ptr, size_t old_size, size_t new_size) {
         fprintf(stderr,
                 "[GC-ALLOC] threshold exceeded: bytes=%zu next_gc=%zu\n",
                 vm->bytes_allocated, vm->next_gc);
-        // vm_collect_garbage(vm);
+        vm_collect_garbage(vm);
     }
 
     if (new_size == 0) {
@@ -513,14 +523,14 @@ static void link_object(VM* vm, Object* obj, uint8_t type) {
 }
 
 void mark_value(VM* vm, Value v) {
-    printf("[DEBUG] mark value call");
+    if (vm->debug_gc) printf("[DEBUG] mark value call on v=%p\n", vm_value_type_name(v));
     (void)vm;
     if (!IS_OBJECT(v)) return;
     mark_object(vm, AS_OBJECT(v));
 }
 
 void mark_object(VM* vm, Object* obj) {
-    printf("[DEBUG] mark obj call");
+    if (vm->debug_gc) printf("[DEBUG] mark obj call on %d\n", obj->type);
     if (obj == NULL || obj->marked) return;
     obj->marked = 1;
 
@@ -792,8 +802,12 @@ ArrayObject* vm_new_array(VM* vm, int capacity) {
 
     link_object(vm, (Object*)arr, VAL_ARRAY);
 
+    if (vm->debug_gc) fprintf(stderr, "[GC-OBJ] ArrayObject linked\n");
+
     arr->capacity = capacity > 0 ? capacity : 0;
     arr->count = 0;
+
+    if (vm->debug_gc) fprintf(stderr, "[GC-OBJ] ArrayObject init cap=%d count=%d\n ", arr->capacity, arr->count);
 
     if (arr->capacity > 0) {
         if (vm->debug_gc) {
@@ -808,8 +822,10 @@ ArrayObject* vm_new_array(VM* vm, int capacity) {
             fprintf(stderr, "[GC-OBJ]   items ptr=%p\n", (void*)arr->items);
         }
     } else {
+        if (vm->debug_gc) fprintf(stderr, "[GC-OBJ] ArrayObject cap 0");
         arr->items = NULL;
     }
+    if (vm->debug_gc) fprintf(stderr, "[GC-OBJ] ArrayObject created");
     return arr;
 }
 
@@ -1066,7 +1082,7 @@ Value vm_call_native(VM* vm, NativeFn function, int arg_count) {
         args = &vm->stack[callee_index + 1];
     }
 
-    Value result = function(arg_count, args);
+    Value result = function(vm, arg_count, args);
 
     vm->sp = callee_index;
     vm_push(vm, result);
@@ -1128,7 +1144,6 @@ static Upvalue* vm_capture_upvalue(VM* vm, Value* slot) {
     // Уже есть upvalue для этого слота
     if (uv && uv->location == slot) return uv;
 
-    // Создаём новый
     Upvalue* created = (Upvalue*)vm_realloc(vm, NULL, 0, sizeof(Upvalue));
     link_object(vm, (Object*)created, VAL_UPVALUE);
 
@@ -1555,67 +1570,109 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 }
                 frame->ip = ip;
 
+                if (vm->debug) {
+                    fprintf(stderr,
+                            "[CALL] opcode=%s argc=%d sp=%d\n",
+                            opcode == OP_CALL_U8 ? "CALL_U8" : "CALL_U16",
+                            argc, vm->sp);
+                }
+
+                if (vm->sp < 1 + argc) {
+                    vm_runtime_error(vm, "CALL: stack underflow (argc=%d, sp=%d)", argc, vm->sp);
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+
                 int callee_index = vm->sp - 1 - argc;
                 Value callee = vm->stack[callee_index];
 
+                if (vm->debug) {
+                    fprintf(stderr,
+                            "[CALL] callee_index=%d type=[%s]\n",
+                            callee_index, vm_value_type_name(callee));
+                }
+
                 if (IS_NATIVE(callee)) {
-                    Value* args = NULL;
-                    if (argc > 0) {
-                        args = ALLOCATE(Value, argc);
-                        // скопировать аргументы из стека, не меняя порядок
-                        for (int i = 0; i < argc; i++) {
-                            args[i] = vm->stack[callee_index + 1 + i];
-                        }
-                    }
-
                     NativeFunctionObject* nf = AS_NATIVE(callee);
-                    Value result = nf->function(argc, args);
+                    Value* args = argc > 0 ? ALLOCATE(Value, argc) : NULL;
 
+                    if (vm->debug) {
+                        fprintf(stderr, "[CALL] allocate native done\n");
+                    }
+                    for (int i = 0; i < argc; i++) {
+                        args[i] = vm->stack[callee_index + 1 + i];
+                    }
+                    if (vm->debug) {
+                        fprintf(stderr, "[CALL] native args loaded\n");
+                    }
+                    Value result = nf->function(vm, argc, args);
+                    if (vm->debug) {
+                        fprintf(stderr, "[CALL] native call result done\n");
+                    }
                     if (argc > 0) FREE_ARRAY(Value, args, argc);
-
-                    // убрать callee + аргументы одним махом
+                    if (vm->debug) {
+                        fprintf(stderr, "[CALL] native free done\n");
+                    }
                     vm->sp = callee_index;
                     vm_push(vm, result);
+                    if (vm->debug) {
+                        fprintf(stderr, "[CALL] native done, new sp=%d\n", vm->sp);
+                    }
                 } else if (IS_CLOSURE(callee)) {
                     ClosureObject* cl = AS_CLOSURE(callee);
                     FunctionObject* fn = cl->function;
 
-                    // сохранить аргументы во временный буфер
-                    Value* args = NULL;
-                    if (argc > 0) {
-                        args = ALLOCATE(Value, argc);
-                        for (int i = 0; i < argc; i++) {
-                            args[i] = vm->stack[callee_index + 1 + i];
-                        }
+                    if (argc != fn->arity) {
+                        vm_runtime_error(vm, "CALL: wrong arg count (expected=%d, got=%d)",
+                                         fn->arity, argc);
+                        return INTERPRET_RUNTIME_ERROR;
                     }
 
-                    // убрать callee + аргументы
-                    vm->sp = callee_index;
+                    int slots_offset = callee_index + 1;
 
-                    vm_push_frame_with_ip(
+                    if (vm->debug) {
+                        fprintf(stderr,
+                                "[CALL] closure func=%s argc=%d slots_offset=%d\n",
+                                fn->name ? fn->name : "<fn>",
+                                argc, slots_offset);
+                    }
+
+                    // Перекладываем аргументы на место локалов
+                    for (int i = 0; i < argc; i++) {
+                        vm->stack[slots_offset + i] = vm->stack[callee_index + 1 + i];
+                    }
+                    vm->sp = slots_offset + argc;
+
+                    vm_push_frame_with_ip_at(
                         vm,
                         fn->bytecode,
                         fn->local_count,
-                        fn->bytecode->code + fn->bytecode->functions[fn->func_index].code_start
+                        fn->bytecode->code + fn->bytecode->functions[fn->func_index].code_start,
+                        slots_offset
                     );
 
                     CallFrame* new_frame = &vm->frames[vm->frame_count - 1];
                     new_frame->closure = cl;
 
-                    // args → локалы 0..argc-1
-                    for (int i = 0; i < argc; i++) {
-                        vm_store_local(vm, i, args[i]);
-                    }
-                    if (argc > 0) FREE_ARRAY(Value, args, argc);
-
                     frame = new_frame;
                     ip = frame->ip;
+
+                    if (vm->debug) {
+                        fprintf(stderr,
+                                "[CALL] new frame: func=%s slots_offset=%d slot_count=%d sp=%d\n",
+                                fn->name ? fn->name : "<fn>",
+                                frame->slots_offset, frame->slot_count, vm->sp);
+                    }
                 } else {
                     vm_runtime_error(vm, "Attempt to call non-callable value");
                     return INTERPRET_RUNTIME_ERROR;
                 }
+
+                if (vm->debug) {
+                    fprintf(stderr, "[DEBUG] CALL end\n");
+                }
                 break;
             }
+
 
             case OP_RETURN: {
                 Value result = vm_pop(vm);
