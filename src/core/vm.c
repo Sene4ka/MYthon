@@ -328,6 +328,7 @@ VM* vm_new(void) {
     vm->objects = NULL;
     vm->bytes_allocated = 0;
     vm->next_gc = 1024 * 1024;
+    vm->debug_gc = 0;
 
     vm->error_count = 0;
     vm->error_message = NULL;
@@ -347,8 +348,7 @@ void vm_free(VM* vm) {
     FREE_ARRAY(Value, vm->globals, vm->global_capacity);
     FREE_ARRAY(Value, vm->constants.values, vm->constants.capacity);
 
-    // TODO: пройтись по списку vm->objects и освободить GC-объекты,
-    // когда будет реализован GC.
+    //vm_collect_garbage(vm);
 
     free_ptr(vm);
 }
@@ -465,6 +465,45 @@ void vm_runtime_error(VM* vm, const char* format, ...) {
     vm->exit_code = 1;
 }
 
+static void* vm_realloc(VM* vm, void* ptr, size_t old_size, size_t new_size) {
+    // простая проверка на подозрительные размеры
+    if (vm->debug_gc) {
+        fprintf(stderr,
+                "[GC-ALLOC] ptr=%p old=%zu new=%zu bytes_allocated(before)=%zu\n",
+                ptr, old_size, new_size, vm->bytes_allocated);
+    }
+
+    vm->bytes_allocated += new_size - old_size;
+
+    if (vm->debug_gc && new_size > old_size && vm->bytes_allocated > vm->next_gc) {
+        fprintf(stderr,
+                "[GC-ALLOC] threshold exceeded: bytes=%zu next_gc=%zu\n",
+                vm->bytes_allocated, vm->next_gc);
+        // vm_collect_garbage(vm);
+    }
+
+    if (new_size == 0) {
+        if (vm->debug_gc) {
+            fprintf(stderr,
+                    "[GC-FREE]  ptr=%p size=%zu bytes_allocated(after)=%zu\n",
+                    ptr, old_size, vm->bytes_allocated);
+        }
+        free_ptr(ptr);
+        return NULL;
+    }
+
+    void* new_ptr = reallocate(ptr, new_size);
+
+    if (vm->debug_gc) {
+        fprintf(stderr,
+                "[GC-REALLOC] %p -> %p (%zu bytes), bytes_allocated(after)=%zu\n",
+                ptr, new_ptr, new_size, vm->bytes_allocated);
+    }
+
+    return new_ptr;
+}
+
+
 static void link_object(VM* vm, Object* obj, uint8_t type) {
     obj->type = type;
     obj->marked = 0;
@@ -472,9 +511,245 @@ static void link_object(VM* vm, Object* obj, uint8_t type) {
     vm->objects = obj;
 }
 
+void mark_value(VM* vm, Value v) {
+    (void)vm;
+    if (!IS_OBJECT(v)) return;
+    mark_object(vm, AS_OBJECT(v));
+}
+
+void mark_object(VM* vm, Object* obj) {
+    if (obj == NULL || obj->marked) return;
+    obj->marked = 1;
+
+    switch (obj->type) {
+        case VAL_STRING: {
+            // StringObject: только данные строки
+            // (chars не содержат других Value/Object)
+            break;
+        }
+        case VAL_ARRAY: {
+            ArrayObject* arr = (ArrayObject*)obj;
+            for (int i = 0; i < arr->count; i++) {
+                mark_value(vm, arr->items[i]);
+            }
+            break;
+        }
+        case VAL_FUNCTION: {
+            FunctionObject* fn = (FunctionObject*)obj;
+            (void)fn;
+            break;
+        }
+        case VAL_NATIVE_FN: {
+            break;
+        }
+        case VAL_CLOSURE: {
+            ClosureObject* cl = (ClosureObject*)obj;
+            mark_object(vm, (Object*)cl->function);
+            for (int i = 0; i < cl->upvalue_count; i++) {
+                Upvalue* uv = cl->upvalues[i];
+                if (!uv) continue;
+                mark_object(vm, (Object*)uv);
+            }
+            break;
+        }
+        case VAL_CLASS: {
+            ClassObject* klass = (ClassObject*)obj;
+            mark_object(vm, (Object*)klass->name);
+            for (int i = 0; i < klass->field_count; i++) {
+                if (klass->field_names[i]) {
+                    mark_object(vm, (Object*)klass->field_names[i]);
+                }
+            }
+            for (int i = 0; i < klass->method_count; i++) {
+                if (klass->methods[i]) {
+                    mark_object(vm, (Object*)klass->methods[i]);
+                }
+            }
+            break;
+        }
+        case VAL_INSTANCE: {
+            InstanceObject* inst = (InstanceObject*)obj;
+            mark_object(vm, (Object*)inst->klass);
+            for (int i = 0; i < inst->field_count; i++) {
+                mark_value(vm, inst->fields[i]);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+void vm_mark_roots(VM* vm) {
+    // Стек
+    for (int i = 0; i < vm->sp; i++) {
+        mark_value(vm, vm->stack[i]);
+    }
+
+    // Глобалы
+    for (int i = 0; i < vm->global_count; i++) {
+        mark_value(vm, vm->globals[i]);
+    }
+
+    // Константы
+    for (int i = 0; i < vm->constants.count; i++) {
+        mark_value(vm, vm->constants.values[i]);
+    }
+
+    // Фреймы — замыкания
+    for (int i = 0; i < vm->frame_count; i++) {
+        CallFrame* f = &vm->frames[i];
+        if (f->closure) {
+            mark_object(vm, (Object*)f->closure);
+        }
+    }
+
+    // Открытые upvalues
+    /*for (Upvalue* uv = vm->open_upvalues; uv != NULL; uv = uv->next) {
+        mark_object(vm, (Object*)uv);
+        if (uv->location) {
+            mark_value(vm, *uv->location);
+        }
+        mark_value(vm, uv->closed);
+    }*/
+}
+
+void vm_collect_garbage(VM* vm) {
+    size_t before = vm->bytes_allocated;
+    int freed_objects = 0;
+
+    vm_mark_roots(vm);
+
+    Object* prev = NULL;
+    Object* obj = vm->objects;
+
+    while (obj != NULL) {
+        if (!obj->marked) {
+            Object* unreached = obj;
+            obj = obj->next;
+
+            if (prev) prev->next = obj;
+            else vm->objects = obj;
+
+            switch (unreached->type) {
+                case VAL_STRING: {
+                    StringObject* s = (StringObject*)unreached;
+                    if (s->chars) {
+                        vm_realloc(vm, s->chars,
+                                   (size_t)s->length + 1, 0);
+                    }
+                    vm_realloc(vm, s, sizeof(StringObject), 0);
+                    break;
+                }
+                case VAL_ARRAY: {
+                    ArrayObject* a = (ArrayObject*)unreached;
+                    if (a->items && a->capacity > 0) {
+                        vm_realloc(vm, a->items,
+                                   sizeof(Value) * (size_t)a->capacity, 0);
+                    }
+                    vm_realloc(vm, a, sizeof(ArrayObject), 0);
+                    break;
+                }
+                case VAL_FUNCTION: {
+                    FunctionObject* fn = (FunctionObject*)unreached;
+                    if (fn->name) {
+                        vm_realloc(vm, fn->name,
+                                   strlen(fn->name) + 1, 0);
+                    }
+                    vm_realloc(vm, fn, sizeof(FunctionObject), 0);
+                    break;
+                }
+                case VAL_NATIVE_FN: {
+                    NativeFunctionObject* nf =
+                        (NativeFunctionObject*)unreached;
+                    if (nf->name) {
+                        vm_realloc(vm, nf->name,
+                                   strlen(nf->name) + 1, 0);
+                    }
+                    vm_realloc(vm, nf, sizeof(NativeFunctionObject), 0);
+                    break;
+                }
+                case VAL_CLOSURE: {
+                    ClosureObject* cl = (ClosureObject*)unreached;
+                    if (cl->upvalues && cl->upvalue_count > 0) {
+                        vm_realloc(vm, cl->upvalues,
+                                   sizeof(Upvalue*) *
+                                       (size_t)cl->upvalue_count,
+                                   0);
+                    }
+                    vm_realloc(vm, cl, sizeof(ClosureObject), 0);
+                    break;
+                }
+                case VAL_CLASS: {
+                    ClassObject* klass = (ClassObject*)unreached;
+                    if (klass->field_names && klass->field_count > 0) {
+                        vm_realloc(vm, klass->field_names,
+                                   sizeof(StringObject*) *
+                                       (size_t)klass->field_count,
+                                   0);
+                    }
+                    if (klass->methods && klass->method_count > 0) {
+                        vm_realloc(vm, klass->methods,
+                                   sizeof(ClosureObject*) *
+                                       (size_t)klass->method_count,
+                                   0);
+                    }
+                    vm_realloc(vm, klass, sizeof(ClassObject), 0);
+                    break;
+                }
+                case VAL_INSTANCE: {
+                    InstanceObject* inst = (InstanceObject*)unreached;
+                    if (inst->fields && inst->field_count > 0) {
+                        vm_realloc(vm, inst->fields,
+                                   sizeof(Value) *
+                                       (size_t)inst->field_count,
+                                   0);
+                    }
+                    vm_realloc(vm, inst, sizeof(InstanceObject), 0);
+                    break;
+                }
+                default: {
+                    Upvalue* uv = (Upvalue*)unreached;
+                    vm_realloc(vm, uv, sizeof(Upvalue), 0);
+                    break;
+                }
+            }
+
+            freed_objects++;
+        } else {
+            obj->marked = 0;
+            prev = obj;
+            obj = obj->next;
+        }
+    }
+
+    size_t after = vm->bytes_allocated;
+    vm->next_gc = vm->bytes_allocated * 2;
+
+    if (vm->debug_gc) {
+        fprintf(stderr,
+                "[GC] collected %d objects, freed %zu bytes (now %zu bytes, next_gc=%zu)\n",
+                freed_objects,
+                before > after ? before - after : 0,
+                after,
+                vm->next_gc);
+    }
+}
+
 StringObject* vm_take_string(VM* vm, char* chars, int length) {
-    StringObject* str = ALLOCATE(StringObject, 1);
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] new StringObject len=%d\n", length);
+    }
+
+    StringObject* str = (StringObject*)vm_realloc(
+            vm, NULL, 0, sizeof(StringObject));
+
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] StringObject ptr=%p\n", (void*)str);
+    }
+
     link_object(vm, (Object*)str, VAL_STRING);
+
     str->chars = chars;
     str->length = length;
     str->hash = hash_string(chars, length);
@@ -482,29 +757,84 @@ StringObject* vm_take_string(VM* vm, char* chars, int length) {
 }
 
 StringObject* vm_copy_string(VM* vm, const char* chars, int length) {
-    char* copy = (char*)allocate((size_t)length + 1);
-    memcpy(copy, chars, length);
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] copy_string len=%d\n", length);
+    }
+
+    char* copy = (char*)vm_realloc(vm, NULL, 0, (size_t)length + 1);
+
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] copy_string buffer=%p\n", (void*)copy);
+    }
+
+    memcpy(copy, chars, (size_t)length);
     copy[length] = '\0';
     return vm_take_string(vm, copy, length);
 }
 
 ArrayObject* vm_new_array(VM* vm, int capacity) {
-    ArrayObject* arr = ALLOCATE(ArrayObject, 1);
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] new ArrayObject cap=%d\n", capacity);
+    }
+
+    ArrayObject* arr = (ArrayObject*)vm_realloc(
+            vm, NULL, 0, sizeof(ArrayObject));
+
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] ArrayObject ptr=%p\n", (void*)arr);
+    }
+
     link_object(vm, (Object*)arr, VAL_ARRAY);
+
     arr->capacity = capacity > 0 ? capacity : 0;
     arr->count = 0;
-    arr->items = arr->capacity > 0 ? ALLOCATE(Value, arr->capacity) : NULL;
+
+    if (arr->capacity > 0) {
+        if (vm->debug_gc) {
+            fprintf(stderr, "[GC-OBJ]   items alloc cap=%d size=%zu\n",
+                    arr->capacity, sizeof(Value) * (size_t)arr->capacity);
+        }
+
+        arr->items = (Value*)vm_realloc(
+                vm, NULL, 0, sizeof(Value) * (size_t)arr->capacity);
+
+        if (vm->debug_gc) {
+            fprintf(stderr, "[GC-OBJ]   items ptr=%p\n", (void*)arr->items);
+        }
+    } else {
+        arr->items = NULL;
+    }
     return arr;
 }
 
 void vm_array_append(VM* vm, ArrayObject* array, Value value) {
-    (void)vm;
+    if (!array) return;
+
     if (array->count >= array->capacity) {
-        int old = array->capacity;
-        int new_cap = old < 8 ? 8 : old * 2;
-        array->items = GROW_ARRAY(Value, array->items, old, new_cap);
+        int old_cap = array->capacity;
+        int new_cap = old_cap < 8 ? 8 : old_cap * 2;
+
+        if (vm->debug_gc) {
+            fprintf(stderr,
+                    "[GC-OBJ] array grow old=%d new=%d ptr=%p\n",
+                    old_cap, new_cap, (void*)array->items);
+        }
+
+        array->items = (Value*)vm_realloc(
+                vm,
+                array->items,
+                sizeof(Value) * (size_t)old_cap,
+                sizeof(Value) * (size_t)new_cap
+        );
+
+        if (vm->debug_gc) {
+            fprintf(stderr,
+                    "[GC-OBJ] array grown ptr=%p\n", (void*)array->items);
+        }
+
         array->capacity = new_cap;
     }
+
     array->items[array->count++] = value;
 }
 
@@ -512,13 +842,35 @@ NativeFunctionObject* vm_new_native_function(VM* vm,
                                              const char* name,
                                              NativeFn function,
                                              int arity) {
-    NativeFunctionObject* nf = ALLOCATE(NativeFunctionObject, 1);
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] new NativeFn name=%s\n", name);
+    }
+
+    NativeFunctionObject* nf = (NativeFunctionObject*)vm_realloc(
+            vm, NULL, 0, sizeof(NativeFunctionObject));
+
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] NativeFn ptr=%p\n", (void*)nf);
+    }
+
     link_object(vm, (Object*)nf, VAL_NATIVE_FN);
+
     nf->function = function;
-    int len = (int)strlen(name);
-    nf->name = (char*)allocate((size_t)len + 1);
-    memcpy(nf->name, name, (size_t)len + 1);
     nf->arity = arity;
+
+    int len = (int)strlen(name);
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ]   name len=%d\n", len);
+    }
+
+    nf->name = (char*)vm_realloc(vm, NULL, 0, (size_t)len + 1);
+
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ]   name ptr=%p\n", (void*)nf->name);
+    }
+
+    memcpy(nf->name, name, (size_t)len + 1);
+
     return nf;
 }
 
@@ -529,32 +881,80 @@ FunctionObject* vm_new_function(VM* vm,
                                 int upvalue_count,
                                 Bytecode* bytecode,
                                 int func_index) {
-    FunctionObject* fn = ALLOCATE(FunctionObject, 1);
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] new Function name=%s\n", name ? name : "<null>");
+    }
+
+    FunctionObject* fn = (FunctionObject*)vm_realloc(
+            vm, NULL, 0, sizeof(FunctionObject));
+
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] Function ptr=%p\n", (void*)fn);
+    }
+
     link_object(vm, (Object*)fn, VAL_FUNCTION);
+
     int len = (int)strlen(name);
-    fn->name = (char*)allocate((size_t)len + 1);
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ]   name len=%d\n", len);
+    }
+
+    fn->name = (char*)vm_realloc(vm, NULL, 0, (size_t)len + 1);
+
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ]   name ptr=%p\n", (void*)fn->name);
+    }
+
     memcpy(fn->name, name, (size_t)len + 1);
+
     fn->arity = arity;
     fn->local_count = local_count;
     fn->upvalue_count = upvalue_count;
     fn->bytecode = bytecode;
     fn->func_index = func_index;
+
     return fn;
 }
 
 ClosureObject* vm_new_closure(VM* vm, FunctionObject* function) {
-    ClosureObject* cl = ALLOCATE(ClosureObject, 1);
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] new Closure func=%s\n",
+                function && function->name ? function->name : "<anon>");
+    }
+
+    ClosureObject* cl = (ClosureObject*)vm_realloc(
+            vm, NULL, 0, sizeof(ClosureObject));
+
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] Closure ptr=%p\n", (void*)cl);
+    }
+
     link_object(vm, (Object*)cl, VAL_CLOSURE);
+
     cl->function = function;
     cl->upvalue_count = function->upvalue_count;
+
     if (cl->upvalue_count > 0) {
-        cl->upvalues = ALLOCATE(Upvalue*, cl->upvalue_count);
+        if (vm->debug_gc) {
+            fprintf(stderr, "[GC-OBJ]   upvalues count=%d\n",
+                    cl->upvalue_count);
+        }
+
+        cl->upvalues = (Upvalue**)vm_realloc(
+                vm, NULL, 0, sizeof(Upvalue*) * (size_t)cl->upvalue_count);
+
+        if (vm->debug_gc) {
+            fprintf(stderr, "[GC-OBJ]   upvalues ptr=%p\n",
+                    (void*)cl->upvalues);
+        }
+
         for (int i = 0; i < cl->upvalue_count; i++) {
             cl->upvalues[i] = NULL;
         }
     } else {
         cl->upvalues = NULL;
     }
+
     return cl;
 }
 
@@ -562,15 +962,34 @@ ClassObject* vm_new_class(VM* vm,
                           StringObject* name,
                           int field_count,
                           int method_count) {
-    ClassObject* klass = ALLOCATE(ClassObject, 1);
-    link_object(vm, (Object*)klass, VAL_CLASS);
-    klass->name = name;
+    if (vm->debug_gc) {
+        fprintf(stderr,
+                "[GC-OBJ] new Class name=%p fields=%d methods=%d\n",
+                (void*)name, field_count, method_count);
+    }
 
+    ClassObject* klass = (ClassObject*)vm_realloc(
+            vm, NULL, 0, sizeof(ClassObject));
+
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] Class ptr=%p\n", (void*)klass);
+    }
+
+    link_object(vm, (Object*)klass, VAL_CLASS);
+
+    klass->name = name;
     klass->field_count = field_count;
     klass->method_count = method_count;
 
     if (field_count > 0) {
-        klass->field_names = ALLOCATE(StringObject*, field_count);
+        klass->field_names = (StringObject**)vm_realloc(
+                vm, NULL, 0, sizeof(StringObject*) * (size_t)field_count);
+
+        if (vm->debug_gc) {
+            fprintf(stderr, "[GC-OBJ]   field_names ptr=%p\n",
+                    (void*)klass->field_names);
+        }
+
         for (int i = 0; i < field_count; i++) {
             klass->field_names[i] = NULL;
         }
@@ -579,7 +998,14 @@ ClassObject* vm_new_class(VM* vm,
     }
 
     if (method_count > 0) {
-        klass->methods = ALLOCATE(ClosureObject*, method_count);
+        klass->methods = (ClosureObject**)vm_realloc(
+                vm, NULL, 0, sizeof(ClosureObject*) * (size_t)method_count);
+
+        if (vm->debug_gc) {
+            fprintf(stderr, "[GC-OBJ]   methods ptr=%p\n",
+                    (void*)klass->methods);
+        }
+
         for (int i = 0; i < method_count; i++) {
             klass->methods[i] = NULL;
         }
@@ -591,18 +1017,39 @@ ClassObject* vm_new_class(VM* vm,
 }
 
 InstanceObject* vm_new_instance(VM* vm, ClassObject* klass) {
-    InstanceObject* inst = ALLOCATE(InstanceObject, 1);
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] new Instance klass=%p fields=%d\n",
+                (void*)klass, klass ? klass->field_count : -1);
+    }
+
+    InstanceObject* inst = (InstanceObject*)vm_realloc(
+            vm, NULL, 0, sizeof(InstanceObject));
+
+    if (vm->debug_gc) {
+        fprintf(stderr, "[GC-OBJ] Instance ptr=%p\n", (void*)inst);
+    }
+
     link_object(vm, (Object*)inst, VAL_INSTANCE);
+
     inst->klass = klass;
     inst->field_count = klass->field_count;
+
     if (inst->field_count > 0) {
-        inst->fields = ALLOCATE(Value, inst->field_count);
+        inst->fields = (Value*)vm_realloc(
+                vm, NULL, 0, sizeof(Value) * (size_t)inst->field_count);
+
+        if (vm->debug_gc) {
+            fprintf(stderr, "[GC-OBJ]   fields ptr=%p count=%d\n",
+                    (void*)inst->fields, inst->field_count);
+        }
+
         for (int i = 0; i < inst->field_count; i++) {
             inst->fields[i] = NIL_VAL;
         }
     } else {
         inst->fields = NULL;
     }
+
     return inst;
 }
 
@@ -1440,12 +1887,4 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
     }
 
     return INTERPRET_OK;
-}
-
-void vm_mark_roots(VM* vm) {
-    (void)vm;
-}
-
-void vm_collect_garbage(VM* vm) {
-    (void)vm;
 }
