@@ -1,0 +1,13 @@
+fn a() {
+    i = 0
+    fn b() {
+        while (i < 10) {
+            print(i)
+            i = i + 1
+        }
+    }
+    return b
+}
+
+c = a()
+c()
