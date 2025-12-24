@@ -57,11 +57,12 @@ if(DEBUG_MEMORY)
     message(STATUS "Memory debugging enabled")
 endif()
 
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    target_compile_options(mython PRIVATE
-            -g -O0 -Wall -Wextra -Werror -pedantic
-    )
-    target_compile_definitions(mython PRIVATE DEBUG=1)
-else()
-    target_compile_options(mython PRIVATE -O2)
-endif()
+set(SANITIZER_FLAGS
+        #-fsanitize=address,undefined,leak
+        #-fno-omit-frame-pointer
+        #-fno-optimize-sibling-calls
+)
+
+target_compile_options(mython PRIVATE -g -O0 -Wall -Wextra -Werror -pedantic ${SANITIZER_FLAGS})
+target_compile_definitions(mython PRIVATE DEBUG=1)
+target_link_options(mython PRIVATE ${SANITIZER_FLAGS})

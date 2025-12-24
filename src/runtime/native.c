@@ -8,16 +8,16 @@
 #include <math.h>
 
 static NativeInfo native_functions[] = {
-        {"print", -1, 0},
-        {"len", 1, 1},
-        {"type", 1, 2},
-        {"exit", 1, 3},
-        {"time", 0, 4},
-        {"push", -1, 5},
-        {"pop", 1, 6},
-        {"random", 0, 7},
-        {"floor", 1, 8},
-        {NULL, 0, -1}
+    {"print",  -1, 0},
+    {"len",     1, 1},
+    {"type",    1, 2},
+    {"exit",    1, 3},
+    {"time",    0, 4},
+    {"push",   -1, 5},
+    {"pop",     1, 6},
+    {"random",  0, 7},
+    {"floor",   1, 8},
+    {NULL,      0, -1}
 };
 
 NativeInfo* native_get_info(const char* name) {
@@ -47,18 +47,21 @@ int native_get_global_index(const char* name) {
 }
 
 void native_register_all(VM* vm) {
-    vm_store_global(vm, 0, OBJECT_VAL(vm_new_native_function(vm, "print", native_print, -1)));
-    vm_store_global(vm, 1, OBJECT_VAL(vm_new_native_function(vm, "len", native_len, 1)));
-    vm_store_global(vm, 2, OBJECT_VAL(vm_new_native_function(vm, "type", native_typeof, 1)));
-    vm_store_global(vm, 3, OBJECT_VAL(vm_new_native_function(vm, "exit", native_exit, 1)));
-    vm_store_global(vm, 4, OBJECT_VAL(vm_new_native_function(vm, "time", native_time, 0)));
-    vm_store_global(vm, 5, OBJECT_VAL(vm_new_native_function(vm, "push", native_array_push, -1)));
-    vm_store_global(vm, 6, OBJECT_VAL(vm_new_native_function(vm, "pop", native_array_pop, 1)));
-    vm_store_global(vm, 7, OBJECT_VAL(vm_new_native_function(vm, "random", native_random, 0)));
-    vm_store_global(vm, 8, OBJECT_VAL(vm_new_native_function(vm, "floor", native_floor, 1)));
+    vm_store_global(vm, 0, OBJECT_VAL(vm_new_native_function(vm, "print",  native_print,  -1)));
+    vm_store_global(vm, 1, OBJECT_VAL(vm_new_native_function(vm, "len",    native_len,     1)));
+    vm_store_global(vm, 2, OBJECT_VAL(vm_new_native_function(vm, "type",   native_typeof,  1)));
+    vm_store_global(vm, 3, OBJECT_VAL(vm_new_native_function(vm, "exit",   native_exit,    1)));
+    vm_store_global(vm, 4, OBJECT_VAL(vm_new_native_function(vm, "time",   native_time,    0)));
+    vm_store_global(vm, 5, OBJECT_VAL(vm_new_native_function(vm, "push",   native_array_push, -1)));
+    vm_store_global(vm, 6, OBJECT_VAL(vm_new_native_function(vm, "pop",    native_array_pop,  1)));
+    vm_store_global(vm, 7, OBJECT_VAL(vm_new_native_function(vm, "random", native_random,  0)));
+    vm_store_global(vm, 8, OBJECT_VAL(vm_new_native_function(vm, "floor",  native_floor,   1)));
 }
 
-Value native_print(int arg_count, Value* args) {
+/* ===== Нативные функции с VM* ===== */
+
+Value native_print(VM* vm, int arg_count, Value* args) {
+    (void)vm;
     for (int i = 0; i < arg_count; i++) {
         vm_print_value(args[i]);
         if (i < arg_count - 1) {
@@ -69,7 +72,8 @@ Value native_print(int arg_count, Value* args) {
     return NIL_VAL;
 }
 
-Value native_len(int arg_count, Value* args) {
+Value native_len(VM* vm, int arg_count, Value* args) {
+    (void)vm;
     if (arg_count != 1) {
         return NIL_VAL;
     }
@@ -89,18 +93,19 @@ Value native_len(int arg_count, Value* args) {
     return INT_VAL(0);
 }
 
-Value native_array_push(int arg_count, Value* args) {
+Value native_array_push(VM* vm, int arg_count, Value* args) {
     if (arg_count < 2) return NIL_VAL;
     if (!IS_ARRAY(args[0])) return NIL_VAL;
 
     ArrayObject* array = AS_ARRAY(args[0]);
     for (int i = 1; i < arg_count; i++) {
-        vm_array_append(NULL, array, args[i]);
+        vm_array_append(vm, array, args[i]);  // vm, не NULL
     }
     return INT_VAL(array->count);
 }
 
-Value native_array_pop(int arg_count, Value* args) {
+Value native_array_pop(VM* vm, int arg_count, Value* args) {
+    (void)vm;
     if (arg_count != 1) return NIL_VAL;
     if (!IS_ARRAY(args[0])) return NIL_VAL;
 
@@ -110,17 +115,17 @@ Value native_array_pop(int arg_count, Value* args) {
     return array->items[--array->count];
 }
 
-Value native_typeof(int arg_count, Value* args) {
+Value native_typeof(VM* vm, int arg_count, Value* args) {
     if (arg_count != 1) {
         return NIL_VAL;
     }
 
     const char* type_name = vm_value_type_name(args[0]);
-    StringObject* str = vm_copy_string(NULL, type_name, strlen(type_name));
+    StringObject* str = vm_copy_string(vm, type_name, strlen(type_name));  // vm, не NULL
     return OBJECT_VAL(str);
 }
 
-Value native_to_string(int arg_count, Value* args) {
+Value native_to_string(VM* vm, int arg_count, Value* args) {
     if (arg_count != 1) {
         return NIL_VAL;
     }
@@ -143,11 +148,12 @@ Value native_to_string(int arg_count, Value* args) {
         snprintf(buffer, sizeof(buffer), "[%s]", type);
     }
 
-    StringObject* str = vm_copy_string(NULL, buffer, strlen(buffer));
+    StringObject* str = vm_copy_string(vm, buffer, strlen(buffer));        // vm, не NULL
     return OBJECT_VAL(str);
 }
 
-Value native_to_int(int arg_count, Value* args) {
+Value native_to_int(VM* vm, int arg_count, Value* args) {
+    (void)vm;
     if (arg_count != 1) {
         return NIL_VAL;
     }
@@ -174,7 +180,8 @@ Value native_to_int(int arg_count, Value* args) {
     return INT_VAL(0);
 }
 
-Value native_to_float(int arg_count, Value* args) {
+Value native_to_float(VM* vm, int arg_count, Value* args) {
+    (void)vm;
     if (arg_count != 1) {
         return NIL_VAL;
     }
@@ -201,7 +208,8 @@ Value native_to_float(int arg_count, Value* args) {
     return FLOAT_VAL(0.0);
 }
 
-Value native_exit(int arg_count, Value* args) {
+Value native_exit(VM* vm, int arg_count, Value* args) {
+    (void)vm;
     int code = 0;
     if (arg_count >= 1 && IS_INT(args[0])) {
         code = (int)AS_INT(args[0]);
@@ -210,22 +218,24 @@ Value native_exit(int arg_count, Value* args) {
     return NIL_VAL;
 }
 
-Value native_time(int arg_count, Value* args) {
+Value native_time(VM* vm, int arg_count, Value* args) {
+    (void)vm;
     (void)args;
     if (arg_count != 0) {
         return NIL_VAL;
     }
-
     return FLOAT_VAL((double)clock() / CLOCKS_PER_SEC);
 }
 
-Value native_random(int arg_count, Value* args) {
+Value native_random(VM* vm, int arg_count, Value* args) {
+    (void)vm;
     (void)args;
     if (arg_count != 0) return NIL_VAL;
     return FLOAT_VAL((double)rand() / RAND_MAX);
 }
 
-Value native_floor(int arg_count, Value* args) {
+Value native_floor(VM* vm, int arg_count, Value* args) {
+    (void)vm;
     if (arg_count != 1) {
         return NIL_VAL;
     }
@@ -242,4 +252,3 @@ Value native_floor(int arg_count, Value* args) {
 
     return NIL_VAL;
 }
-

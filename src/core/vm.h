@@ -72,14 +72,6 @@ typedef struct {
     int func_index;
 } FunctionObject;
 
-typedef Value (*NativeFn)(int arg_count, Value* args);
-
-typedef struct {
-    Object obj;
-    NativeFn function;
-    char* name;
-    int arity;
-} NativeFunctionObject;
 
 typedef struct Upvalue {
     Object obj;
@@ -193,6 +185,15 @@ typedef struct {
     int exit_code;
 } VM;
 
+typedef Value (*NativeFn)(VM* vm, int arg_count, Value* args);
+
+typedef struct {
+    Object obj;
+    NativeFn function;
+    char* name;
+    int arity;
+} NativeFunctionObject;
+
 typedef enum {
     INTERPRET_OK,
     INTERPRET_COMPILE_ERROR,
@@ -215,6 +216,7 @@ Value vm_peek(VM* vm, int distance);
 /* Call frames */
 void vm_push_frame(VM* vm, Bytecode* bytecode, int slot_count);
 void vm_push_frame_with_ip(VM* vm, Bytecode* bytecode, int slot_count, uint8_t* ip_start);
+void vm_push_frame_with_ip_at(VM* vm, Bytecode* bytecode, int slot_count, uint8_t* ip_start, int slots_offset);
 void vm_pop_frame(VM* vm);
 
 /* Globals / locals */
