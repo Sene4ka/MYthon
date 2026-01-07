@@ -1,12 +1,14 @@
 #include "vm.h"
-#include "bytecode.h"
+#include "core/bytecode.h"
 #include "utils/memory.h"
+#include "gc.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <stdarg.h>
+#include <stddef.h>
 
 #define INITIAL_STACK_SIZE 256
 #define INITIAL_FRAMES     64
@@ -45,10 +47,6 @@ static const char* opcode_name(uint8_t opcode) {
         case OP_RETURN:             return "RETURN";
         case OP_RETURN_NIL:         return "RETURN_NIL";
         case OP_NEW_CLOSURE:        return "NEW_CLOSURE";
-        case OP_NEW_CLASS:          return "NEW_CLASS";
-        case OP_LOAD_FIELD_U8:      return "LOAD_FIELD";
-        case OP_STORE_FIELD_U8:     return "STORE_FIELD";
-        case OP_CALL_METHOD_U8:     return "CALL_METHOD";
         case OP_ARRAY_NEW_U8:       return "ARRAY_NEW";
         case OP_ARRAY_GET:          return "ARRAY_GET";
         case OP_ARRAY_SET:          return "ARRAY_SET";
@@ -98,9 +96,6 @@ static void debug_print_instruction(Bytecode* bc, uint8_t* ip) {
         case OP_STORE_LOCAL_U8:
         case OP_LOAD_UPVALUE_U8:
         case OP_STORE_UPVALUE_U8:
-        case OP_LOAD_FIELD_U8:
-        case OP_STORE_FIELD_U8:
-        case OP_CALL_METHOD_U8:
         case OP_ARRAY_NEW_U8: {
             uint8_t b = ip[1];
             fprintf(stderr, " %u", b);
@@ -134,15 +129,13 @@ static void debug_print_instruction(Bytecode* bc, uint8_t* ip) {
             break;
         }
 
-        case OP_NEW_CLOSURE:
-        case OP_NEW_CLASS: {
+        case OP_NEW_CLOSURE: {
             uint16_t idx = (uint16_t)(ip[1] << 8 | ip[2]);
             fprintf(stderr, " %u", idx);
             break;
         }
 
         default:
-            // без операндов
             break;
     }
 
@@ -278,8 +271,6 @@ const char* vm_value_type_name(Value v) {
         case VAL_FUNCTION: return "function";
         case VAL_NATIVE_FN:return "native";
         case VAL_CLOSURE:  return "closure";
-        case VAL_CLASS:    return "class";
-        case VAL_INSTANCE: return "instance";
         case VAL_UPVALUE:  return "upvalue";
         default:           return "unknown";
     }
@@ -300,8 +291,6 @@ void vm_print_value(Value v) {
         case VAL_FUNCTION: printf("[function]"); break;
         case VAL_NATIVE_FN:printf("[native]"); break;
         case VAL_CLOSURE:  printf("[closure]"); break;
-        case VAL_CLASS:    printf("[class]"); break;
-        case VAL_INSTANCE: printf("[instance]"); break;
         default:           printf("[unknown]"); break;
     }
 }
@@ -314,6 +303,10 @@ VM* vm_new(void) {
     vm->sp = 0;
     vm->stack_size = 0;
 
+    for (int i = 0; i < vm->stack_capacity; i++) {
+        vm->stack[i] = NIL_VAL;
+    }
+
     vm->frame_capacity = INITIAL_FRAMES;
     vm->frames = ALLOCATE(CallFrame, vm->frame_capacity);
     vm->frame_count = 0;
@@ -322,14 +315,24 @@ VM* vm_new(void) {
     vm->globals = ALLOCATE(Value, vm->global_capacity);
     vm->global_count = 0;
 
+    for (int i = 0; i < vm->global_capacity; i++) {
+        vm->globals[i] = NIL_VAL;
+    }
+
     vm->constants.values = ALLOCATE(Value, INITIAL_CONSTANTS);
     vm->constants.capacity = INITIAL_CONSTANTS;
     vm->constants.count = 0;
 
+    for (int i = 0; i < vm->constants.capacity; i++) {
+        vm->constants.values[i] = NIL_VAL;
+    }
+
     vm->objects = NULL;
     vm->bytes_allocated = 0;
     vm->next_gc = 1024 * 1024;
+    vm->gc_collecting = 0;
     vm->debug_gc = 0;
+    vm->open_upvalues = NULL;
 
     vm->error_count = 0;
     vm->error_message = NULL;
@@ -358,8 +361,18 @@ void vm_push(VM* vm, Value value) {
     if (vm->sp >= vm->stack_capacity) {
         int old = vm->stack_capacity;
         int new_cap = old * 2;
+        Value* old_stack = vm->stack;
         vm->stack = GROW_ARRAY(Value, vm->stack, old, new_cap);
         vm->stack_capacity = new_cap;
+
+        if (vm->stack != old_stack) {
+            ptrdiff_t offset = vm->stack - old_stack;
+            for (Upvalue* uv = vm->open_upvalues; uv != NULL; uv = uv->next) {
+                if (uv->location && uv->location != &uv->closed) {
+                    uv->location = uv->location + offset;
+                }
+            }
+        }
     }
     vm->stack[vm->sp++] = value;
     if (vm->sp > vm->stack_size) {
@@ -476,281 +489,6 @@ void vm_runtime_error(VM* vm, const char* format, ...) {
     vm->exit_code = 1;
 }
 
-static void* vm_realloc(VM* vm, void* ptr, size_t old_size, size_t new_size) {
-    // простая проверка на подозрительные размеры
-    if (vm->debug_gc) {
-        fprintf(stderr,
-                "[GC-ALLOC] ptr=%p old=%zu new=%zu bytes_allocated(before)=%zu\n",
-                ptr, old_size, new_size, vm->bytes_allocated);
-    }
-
-    vm->bytes_allocated += new_size - old_size;
-
-    if (vm->debug_gc && new_size > old_size && vm->bytes_allocated > vm->next_gc) {
-        fprintf(stderr,
-                "[GC-ALLOC] threshold exceeded: bytes=%zu next_gc=%zu\n",
-                vm->bytes_allocated, vm->next_gc);
-        vm_collect_garbage(vm);
-    }
-
-    if (new_size == 0) {
-        if (vm->debug_gc) {
-            fprintf(stderr,
-                    "[GC-FREE]  ptr=%p size=%zu bytes_allocated(after)=%zu\n",
-                    ptr, old_size, vm->bytes_allocated);
-        }
-        free_ptr(ptr);
-        return NULL;
-    }
-
-    void* new_ptr = reallocate(ptr, new_size);
-
-    if (vm->debug_gc) {
-        fprintf(stderr,
-                "[GC-REALLOC] %p -> %p (%zu bytes), bytes_allocated(after)=%zu\n",
-                ptr, new_ptr, new_size, vm->bytes_allocated);
-    }
-
-    return new_ptr;
-}
-
-
-static void link_object(VM* vm, Object* obj, uint8_t type) {
-    obj->type = type;
-    obj->marked = 0;
-    obj->next = vm->objects;
-    vm->objects = obj;
-}
-
-void mark_value(VM* vm, Value v) {
-    if (vm->debug_gc) printf("[DEBUG] mark value call on v=%p\n", vm_value_type_name(v));
-    (void)vm;
-    if (!IS_OBJECT(v)) return;
-    mark_object(vm, AS_OBJECT(v));
-}
-
-void mark_object(VM* vm, Object* obj) {
-    if (vm->debug_gc) printf("[DEBUG] mark obj call on %d\n", obj->type);
-    if (obj == NULL || obj->marked) return;
-    obj->marked = 1;
-
-    switch (obj->type) {
-        case VAL_STRING: {
-            break;
-        }
-        case VAL_ARRAY: {
-            ArrayObject* arr = (ArrayObject*)obj;
-            for (int i = 0; i < arr->count; i++) {
-                mark_value(vm, arr->items[i]);
-            }
-            break;
-        }
-        case VAL_FUNCTION: {
-            FunctionObject* fn = (FunctionObject*)obj;
-            (void)fn;
-            break;
-        }
-        case VAL_NATIVE_FN: {
-            break;
-        }
-        case VAL_CLOSURE: {
-            ClosureObject* cl = (ClosureObject*)obj;
-            mark_object(vm, (Object*)cl->function);
-            for (int i = 0; i < cl->upvalue_count; i++) {
-                Upvalue* uv = cl->upvalues[i];
-                if (!uv) continue;
-                mark_object(vm, (Object*)uv);
-            }
-            break;
-        }
-        case VAL_CLASS: {
-            ClassObject* klass = (ClassObject*)obj;
-            mark_object(vm, (Object*)klass->name);
-            for (int i = 0; i < klass->field_count; i++) {
-                if (klass->field_names[i]) {
-                    mark_object(vm, (Object*)klass->field_names[i]);
-                }
-            }
-            for (int i = 0; i < klass->method_count; i++) {
-                if (klass->methods[i]) {
-                    mark_object(vm, (Object*)klass->methods[i]);
-                }
-            }
-            break;
-        }
-        case VAL_INSTANCE: {
-            InstanceObject* inst = (InstanceObject*)obj;
-            mark_object(vm, (Object*)inst->klass);
-            for (int i = 0; i < inst->field_count; i++) {
-                mark_value(vm, inst->fields[i]);
-            }
-            break;
-        }
-        case VAL_UPVALUE: {
-            Upvalue* uv = (Upvalue*)obj;
-            if (uv->location) mark_value(vm, *uv->location);
-            mark_value(vm, uv->closed);
-            break;
-        }
-        default:
-            break;
-    }
-}
-
-void vm_mark_roots(VM* vm) {
-    // Стек
-    for (int i = 0; i < vm->sp; i++) {
-        mark_value(vm, vm->stack[i]);
-    }
-
-    // Глобалы
-    for (int i = 0; i < vm->global_count; i++) {
-        mark_value(vm, vm->globals[i]);
-    }
-
-    // Константы
-    for (int i = 0; i < vm->constants.count; i++) {
-        mark_value(vm, vm->constants.values[i]);
-    }
-
-    // Фреймы — замыкания
-    for (int i = 0; i < vm->frame_count; i++) {
-        CallFrame* f = &vm->frames[i];
-        if (f->closure) {
-            mark_object(vm, (Object*)f->closure);
-        }
-    }
-
-    for (Upvalue* uv = vm->open_upvalues; uv != NULL; uv = uv->next) {
-        mark_object(vm, (Object*)uv);
-        if (uv->location) {
-            mark_value(vm, *uv->location);
-        }
-        mark_value(vm, uv->closed);
-    }
-}
-
-void vm_collect_garbage(VM* vm) {
-    size_t before = vm->bytes_allocated;
-    int freed_objects = 0;
-
-    vm_mark_roots(vm);
-
-    Object* prev = NULL;
-    Object* obj = vm->objects;
-
-    while (obj != NULL) {
-        if (!obj->marked) {
-            Object* unreached = obj;
-            obj = obj->next;
-
-            if (prev) prev->next = obj;
-            else vm->objects = obj;
-
-            switch (unreached->type) {
-                case VAL_STRING: {
-                    StringObject* s = (StringObject*)unreached;
-                    if (s->chars) {
-                        vm_realloc(vm, s->chars,
-                                   (size_t)s->length + 1, 0);
-                    }
-                    vm_realloc(vm, s, sizeof(StringObject), 0);
-                    break;
-                }
-                case VAL_ARRAY: {
-                    ArrayObject* a = (ArrayObject*)unreached;
-                    if (a->items && a->capacity > 0) {
-                        vm_realloc(vm, a->items,
-                                   sizeof(Value) * (size_t)a->capacity, 0);
-                    }
-                    vm_realloc(vm, a, sizeof(ArrayObject), 0);
-                    break;
-                }
-                case VAL_FUNCTION: {
-                    FunctionObject* fn = (FunctionObject*)unreached;
-                    if (fn->name) {
-                        vm_realloc(vm, fn->name,
-                                   strlen(fn->name) + 1, 0);
-                    }
-                    vm_realloc(vm, fn, sizeof(FunctionObject), 0);
-                    break;
-                }
-                case VAL_NATIVE_FN: {
-                    NativeFunctionObject* nf =
-                        (NativeFunctionObject*)unreached;
-                    if (nf->name) {
-                        vm_realloc(vm, nf->name,
-                                   strlen(nf->name) + 1, 0);
-                    }
-                    vm_realloc(vm, nf, sizeof(NativeFunctionObject), 0);
-                    break;
-                }
-                case VAL_CLOSURE: {
-                    ClosureObject* cl = (ClosureObject*)unreached;
-                    if (cl->upvalues && cl->upvalue_count > 0) {
-                        vm_realloc(vm, cl->upvalues,
-                                   sizeof(Upvalue*) *
-                                       (size_t)cl->upvalue_count,
-                                   0);
-                    }
-                    vm_realloc(vm, cl, sizeof(ClosureObject), 0);
-                    break;
-                }
-                case VAL_CLASS: {
-                    ClassObject* klass = (ClassObject*)unreached;
-                    if (klass->field_names && klass->field_count > 0) {
-                        vm_realloc(vm, klass->field_names,
-                                   sizeof(StringObject*) *
-                                       (size_t)klass->field_count,
-                                   0);
-                    }
-                    if (klass->methods && klass->method_count > 0) {
-                        vm_realloc(vm, klass->methods,
-                                   sizeof(ClosureObject*) *
-                                       (size_t)klass->method_count,
-                                   0);
-                    }
-                    vm_realloc(vm, klass, sizeof(ClassObject), 0);
-                    break;
-                }
-                case VAL_INSTANCE: {
-                    InstanceObject* inst = (InstanceObject*)unreached;
-                    if (inst->fields && inst->field_count > 0) {
-                        vm_realloc(vm, inst->fields,
-                                   sizeof(Value) *
-                                       (size_t)inst->field_count,
-                                   0);
-                    }
-                    vm_realloc(vm, inst, sizeof(InstanceObject), 0);
-                    break;
-                }
-                case VAL_UPVALUE: {
-                    Upvalue* uv = (Upvalue*)unreached;
-                    vm_realloc(vm, uv, sizeof(Upvalue), 0);
-                    break;
-                }
-            }
-
-            freed_objects++;
-        } else {
-            obj->marked = 0;
-            prev = obj;
-            obj = obj->next;
-        }
-    }
-
-    size_t after = vm->bytes_allocated;
-    vm->next_gc = vm->bytes_allocated * 2;
-
-    if (vm->debug_gc) {
-        fprintf(stderr,
-                "[GC] collected %d objects, freed %zu bytes (now %zu bytes, next_gc=%zu)\n",
-                freed_objects,
-                before > after ? before - after : 0,
-                after,
-                vm->next_gc);
-    }
-}
 
 StringObject* vm_take_string(VM* vm, char* chars, int length) {
     if (vm->debug_gc) {
@@ -980,101 +718,6 @@ ClosureObject* vm_new_closure(VM* vm, FunctionObject* function) {
     return cl;
 }
 
-ClassObject* vm_new_class(VM* vm,
-                          StringObject* name,
-                          int field_count,
-                          int method_count) {
-    if (vm->debug_gc) {
-        fprintf(stderr,
-                "[GC-OBJ] new Class name=%p fields=%d methods=%d\n",
-                (void*)name, field_count, method_count);
-    }
-
-    ClassObject* klass = (ClassObject*)vm_realloc(
-            vm, NULL, 0, sizeof(ClassObject));
-
-    if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] Class ptr=%p\n", (void*)klass);
-    }
-
-    link_object(vm, (Object*)klass, VAL_CLASS);
-
-    klass->name = name;
-    klass->field_count = field_count;
-    klass->method_count = method_count;
-
-    if (field_count > 0) {
-        klass->field_names = (StringObject**)vm_realloc(
-                vm, NULL, 0, sizeof(StringObject*) * (size_t)field_count);
-
-        if (vm->debug_gc) {
-            fprintf(stderr, "[GC-OBJ]   field_names ptr=%p\n",
-                    (void*)klass->field_names);
-        }
-
-        for (int i = 0; i < field_count; i++) {
-            klass->field_names[i] = NULL;
-        }
-    } else {
-        klass->field_names = NULL;
-    }
-
-    if (method_count > 0) {
-        klass->methods = (ClosureObject**)vm_realloc(
-                vm, NULL, 0, sizeof(ClosureObject*) * (size_t)method_count);
-
-        if (vm->debug_gc) {
-            fprintf(stderr, "[GC-OBJ]   methods ptr=%p\n",
-                    (void*)klass->methods);
-        }
-
-        for (int i = 0; i < method_count; i++) {
-            klass->methods[i] = NULL;
-        }
-    } else {
-        klass->methods = NULL;
-    }
-
-    return klass;
-}
-
-InstanceObject* vm_new_instance(VM* vm, ClassObject* klass) {
-    if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] new Instance klass=%p fields=%d\n",
-                (void*)klass, klass ? klass->field_count : -1);
-    }
-
-    InstanceObject* inst = (InstanceObject*)vm_realloc(
-            vm, NULL, 0, sizeof(InstanceObject));
-
-    if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] Instance ptr=%p\n", (void*)inst);
-    }
-
-    link_object(vm, (Object*)inst, VAL_INSTANCE);
-
-    inst->klass = klass;
-    inst->field_count = klass->field_count;
-
-    if (inst->field_count > 0) {
-        inst->fields = (Value*)vm_realloc(
-                vm, NULL, 0, sizeof(Value) * (size_t)inst->field_count);
-
-        if (vm->debug_gc) {
-            fprintf(stderr, "[GC-OBJ]   fields ptr=%p count=%d\n",
-                    (void*)inst->fields, inst->field_count);
-        }
-
-        for (int i = 0; i < inst->field_count; i++) {
-            inst->fields[i] = NIL_VAL;
-        }
-    } else {
-        inst->fields = NULL;
-    }
-
-    return inst;
-}
-
 Value vm_call_native(VM* vm, NativeFn function, int arg_count) {
     int callee_index = vm->sp - 1 - arg_count;
     Value* args = NULL;
@@ -1103,10 +746,8 @@ Value vm_call_value(VM* vm, Value callee, int arg_count) {
             return NIL_VAL;
         }
 
-        // стек: ..., callee, arg0..argN-1
         int callee_index = vm->sp - 1 - arg_count;
 
-        // создаём новый фрейм
         vm_push_frame_with_ip(
             vm,
             fn->bytecode,
@@ -1116,12 +757,10 @@ Value vm_call_value(VM* vm, Value callee, int arg_count) {
         CallFrame* new_frame = &vm->frames[vm->frame_count - 1];
         new_frame->closure = cl;
 
-        // args → локалы
         for (int i = 0; i < arg_count; i++) {
             vm_store_local(vm, i, vm->stack[callee_index + 1 + i]);
         }
 
-        // убрать callee + аргументы
         vm->sp = callee_index;
 
         return NIL_VAL;
@@ -1135,13 +774,11 @@ static Upvalue* vm_capture_upvalue(VM* vm, Value* slot) {
     Upvalue* prev = NULL;
     Upvalue* uv = vm->open_upvalues;
 
-    // Список отсортирован по убыванию адресов location
     while (uv && uv->location > slot) {
         prev = uv;
         uv = uv->next;
     }
 
-    // Уже есть upvalue для этого слота
     if (uv && uv->location == slot) return uv;
 
     Upvalue* created = (Upvalue*)vm_realloc(vm, NULL, 0, sizeof(Upvalue));
@@ -1164,13 +801,6 @@ static void vm_close_upvalues(VM* vm, Value* last) {
         uv->location = &uv->closed;
         vm->open_upvalues = uv->next;
     }
-}
-
-InterpretResult vm_interpret(VM* vm, const char* source) {
-    (void)vm;
-    (void)source;
-    // Компилятор ещё не подключен; тут будет compile+vm_run.
-    return INTERPRET_COMPILE_ERROR;
 }
 
 static uint16_t read_u16(uint8_t* ip) {
@@ -1203,12 +833,6 @@ static void vm_load_constants(VM* vm, Bytecode* bc) {
                 int len = (int)strlen(c->str_val);
                 StringObject* s = vm_copy_string(vm, c->str_val, len);
                 v = OBJECT_VAL(s);
-                break;
-            }
-            case CONST_CLOSURE: {
-                // пока как "функция с индексом"
-                v.type = VAL_FUNCTION;
-                v.as.integer = (int)c->closure.func_idx;
                 break;
             }
             default:
@@ -1636,7 +1260,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                                 argc, slots_offset);
                     }
 
-                    // Перекладываем аргументы на место локалов
                     for (int i = 0; i < argc; i++) {
                         vm->stack[slots_offset + i] = vm->stack[callee_index + 1 + i];
                     }
@@ -1863,111 +1486,6 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 break;
             }
 
-            case OP_NEW_CLASS: {
-                uint16_t class_idx = read_u16(ip);
-                ip += 2;
-                frame->ip = ip;
-
-                if (class_idx >= bytecode->class_count) {
-                    vm_runtime_error(vm, "NEW_CLASS: bad class index");
-                    return INTERPRET_RUNTIME_ERROR;
-                }
-
-                ClassTemplate* tmpl = &bytecode->classes[class_idx];
-
-                StringObject* name = vm_copy_string(vm, "Class", 5);
-                ClassObject* klass = vm_new_class(
-                    vm,
-                    name,
-                    tmpl->n_fields,
-                    tmpl->n_methods
-                );
-
-                for (int i = 0; i < tmpl->n_fields; i++) {
-                    if (tmpl->field_names && tmpl->field_names[i]) {
-                        int len = (int)strlen(tmpl->field_names[i]);
-                        klass->field_names[i] = vm_copy_string(vm, tmpl->field_names[i], len);
-                    }
-                }
-
-                for (int i = tmpl->n_methods - 1; i >= 0; i--) {
-                    Value m = vm_pop(vm);
-                    if (!IS_CLOSURE(m)) {
-                        vm_runtime_error(vm, "NEW_CLASS: method is not closure");
-                        return INTERPRET_RUNTIME_ERROR;
-                    }
-                    klass->methods[i] = AS_CLOSURE(m);
-                }
-
-                vm_push(vm, OBJECT_VAL(klass));
-                break;
-            }
-
-            case OP_LOAD_FIELD_U8: {
-                uint8_t idx = *ip++;
-                frame->ip = ip;
-                Value instance_val = vm_pop(vm);
-                if (!IS_INSTANCE(instance_val)) {
-                    vm_runtime_error(vm, "LOAD_FIELD: receiver is not instance");
-                    return INTERPRET_RUNTIME_ERROR;
-                }
-                InstanceObject* inst = AS_INSTANCE(instance_val);
-                if (idx >= (uint8_t)inst->field_count) {
-                    vm_runtime_error(vm, "LOAD_FIELD: bad field index");
-                    return INTERPRET_RUNTIME_ERROR;
-                }
-                vm_push(vm, inst->fields[idx]);
-                break;
-            }
-
-            case OP_STORE_FIELD_U8: {
-                uint8_t idx = *ip++;
-                frame->ip = ip;
-                Value value = vm_pop(vm);
-                Value instance_val = vm_pop(vm);
-                if (!IS_INSTANCE(instance_val)) {
-                    vm_runtime_error(vm, "STORE_FIELD: receiver is not instance");
-                    return INTERPRET_RUNTIME_ERROR;
-                }
-                InstanceObject* inst = AS_INSTANCE(instance_val);
-                if (idx >= (uint8_t)inst->field_count) {
-                    vm_runtime_error(vm, "STORE_FIELD: bad field index");
-                    return INTERPRET_RUNTIME_ERROR;
-                }
-                inst->fields[idx] = value;
-                vm_push(vm, value);
-                break;
-            }
-
-            case OP_CALL_METHOD_U8: {
-                uint8_t method_idx = *ip++;
-                frame->ip = ip;
-
-                int argc = 0; // FIXME synchronize with bytecode codegen
-
-                Value receiver = vm_peek(vm, argc);
-                if (!IS_INSTANCE(receiver)) {
-                    vm_runtime_error(vm, "CALL_METHOD: receiver is not instance");
-                    return INTERPRET_RUNTIME_ERROR;
-                }
-                InstanceObject* inst = AS_INSTANCE(receiver);
-                ClassObject* klass = inst->klass;
-                if (!klass || method_idx >= (uint8_t)klass->method_count) {
-                    vm_runtime_error(vm, "CALL_METHOD: bad method index");
-                    return INTERPRET_RUNTIME_ERROR;
-                }
-
-                ClosureObject* method_clo = klass->methods[method_idx];
-                if (!method_clo) {
-                    vm_runtime_error(vm, "CALL_METHOD: null method");
-                    return INTERPRET_RUNTIME_ERROR;
-                }
-
-                vm_push(vm, receiver);
-                vm_call_value(vm, OBJECT_VAL(method_clo), argc + 1);
-                break;
-            }
-
             case OP_LOAD_UPVALUE_U8: {
                 uint8_t idx = *ip++;
                 frame->ip = ip;
@@ -1976,7 +1494,12 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                     return INTERPRET_RUNTIME_ERROR;
                 }
                 Upvalue* uv = frame->closure->upvalues[idx];
-                vm_push(vm, uv ? *uv->location : NIL_VAL);
+                if (!uv) {
+                    vm_runtime_error(vm, "LOAD_UPVALUE: null upvalue");
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+                Value val = (uv->location != NULL) ? *uv->location : uv->closed;
+                vm_push(vm, val);
                 break;
             }
 

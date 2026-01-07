@@ -26,9 +26,6 @@ int main(int argc, char *argv[]) {
         case MODE_DISASM:
             result = disassemble_file(args);
             break;
-        case MODE_REPL:
-            result = start_repl(args);
-            break;
         case MODE_HELP:
             print_usage();
             break;

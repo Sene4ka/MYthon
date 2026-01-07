@@ -2,7 +2,6 @@
 #define MYTHON_BYTECODE_H
 
 #include <stdint.h>
-#include <stddef.h>
 #include <stdbool.h>
 
 typedef enum {
@@ -27,12 +26,8 @@ typedef enum {
     OP_CALL_U8 = 0x60, OP_CALL_U16 = 0x61,
     OP_RETURN = 0x62, OP_RETURN_NIL = 0x63,
 
-    // Classes/Objects
+    // Closures
     OP_NEW_CLOSURE = 0x80,
-    OP_NEW_CLASS = 0x81,
-    OP_LOAD_FIELD_U8 = 0x82,
-    OP_STORE_FIELD_U8 = 0x83,
-    OP_CALL_METHOD_U8 = 0x84,
 
     // Arrays
     OP_ARRAY_NEW_U8 = 0xA0, OP_ARRAY_GET = 0xA1, OP_ARRAY_SET = 0xA2, OP_ARRAY_LEN = 0xA3,
@@ -40,7 +35,7 @@ typedef enum {
     // Globals
     OP_LOAD_GLOBAL_U16 = 0xB0, OP_STORE_GLOBAL_U16 = 0xB1,
 
-    // Debug/GC
+    // Debug
     OP_PRINT = 0xF0, OP_BREAK = 0xFF
 } OpCode;
 
@@ -48,7 +43,7 @@ extern const uint8_t opcode_operand_length[256];
 
 typedef enum {
     CONST_INT, CONST_FLOAT, CONST_STRING,
-    CONST_CLOSURE, CONST_CLASS, CONST_NATIVE_FN
+    CONST_CLOSURE, CONST_NATIVE_FN
 } ConstType;
 
 typedef struct {
@@ -58,7 +53,6 @@ typedef struct {
         double float_val;
         char* str_val;
         struct { uint32_t func_idx; uint16_t upvalue_count; } closure;
-        struct { uint32_t class_idx; } class_ref;
         void* native_ptr;
     };
 
@@ -85,14 +79,6 @@ typedef struct {
 } Function;
 
 typedef struct {
-    char** field_names;
-    char** method_names;
-    uint16_t* field_indices;
-    uint16_t n_fields;
-    uint16_t n_methods;
-} ClassTemplate;
-
-typedef struct {
     uint8_t* code;
     size_t code_capacity;
     size_t code_size;
@@ -109,10 +95,6 @@ typedef struct {
     uint16_t* global_const_indices;
     size_t global_count;
     size_t global_capacity;
-
-    ClassTemplate* classes;
-    size_t class_capacity;
-    size_t class_count;
 
     uint32_t main_closure_idx;
 
@@ -141,10 +123,6 @@ void bc_end_function(Bytecode* bc, uint32_t func_idx);
 
 int bc_resolve_global(Bytecode* bc, const char* name);
 int bc_define_global(Bytecode* bc, const char* name, int const_idx);
-
-uint32_t bc_define_class(Bytecode* bc, const char* name, uint16_t n_fields, uint16_t n_methods);
-void bc_set_field(Bytecode* bc, uint32_t class_idx, uint16_t field_idx, const char* name, int const_idx);
-void bc_set_method(Bytecode* bc, uint32_t class_idx, uint16_t method_idx, const char* name);
 
 size_t bc_current_offset(Bytecode* bc);
 void bc_disassemble(Bytecode* bc, const char* name);

@@ -20,7 +20,6 @@ static int disassemble_instruction_internal(const Bytecode* bc, size_t offset) {
     else           printf("   - ");
 
     switch (op) {
-        /* stack/arith/logical */
         case OP_NOP:  printf("NOP"); return (int)(offset + 1);
         case OP_HALT: printf("HALT"); return (int)(offset + 1);
 
@@ -44,14 +43,12 @@ static int disassemble_instruction_internal(const Bytecode* bc, size_t offset) {
         case OP_AND:  printf("AND");  return (int)(offset + 1);
         case OP_OR:   printf("OR");   return (int)(offset + 1);
 
-        /* constants */
         case OP_LOAD_CONST_U16: {
             uint16_t idx = (uint16_t)(ip[1] << 8 | ip[2]);
             printf("LOAD_CONST_U16 %u", idx);
             return (int)(offset + 3);
         }
 
-        /* locals/upvalues */
         case OP_LOAD_LOCAL_U8: {
             uint8_t idx = ip[1];
             printf("LOAD_LOCAL_U8 %u", idx);
@@ -73,7 +70,6 @@ static int disassemble_instruction_internal(const Bytecode* bc, size_t offset) {
             return (int)(offset + 2);
         }
 
-        /* jumps */
         case OP_JUMP_U16:
         case OP_JUMP_IF_FALSE_U16:
         case OP_JUMP_IF_TRUE_U16: {
@@ -86,7 +82,6 @@ static int disassemble_instruction_internal(const Bytecode* bc, size_t offset) {
             return (int)(offset + 3);
         }
 
-        /* calls */
         case OP_CALL_U8: {
             uint8_t argc = ip[1];
             printf("CALL_U8 %u", argc);
@@ -101,27 +96,8 @@ static int disassemble_instruction_internal(const Bytecode* bc, size_t offset) {
         case OP_RETURN:     printf("RETURN");     return (int)(offset + 1);
         case OP_RETURN_NIL: printf("RETURN_NIL"); return (int)(offset + 1);
 
-        /* closures/classes */
         case OP_NEW_CLOSURE: printf("NEW_CLOSURE"); return (int)(offset + 1);
-        case OP_NEW_CLASS:   printf("NEW_CLASS");   return (int)(offset + 1);
 
-        case OP_LOAD_FIELD_U8: {
-            uint8_t idx = ip[1];
-            printf("LOAD_FIELD_U8 %u", idx);
-            return (int)(offset + 2);
-        }
-        case OP_STORE_FIELD_U8: {
-            uint8_t idx = ip[1];
-            printf("STORE_FIELD_U8 %u", idx);
-            return (int)(offset + 2);
-        }
-        case OP_CALL_METHOD_U8: {
-            uint8_t argc = ip[1];
-            printf("CALL_METHOD_U8 %u", argc);
-            return (int)(offset + 2);
-        }
-
-        /* arrays */
         case OP_ARRAY_NEW_U8: {
             uint8_t count = ip[1];
             printf("ARRAY_NEW_U8 %u", count);
@@ -131,7 +107,6 @@ static int disassemble_instruction_internal(const Bytecode* bc, size_t offset) {
         case OP_ARRAY_SET: printf("ARRAY_SET"); return (int)(offset + 1);
         case OP_ARRAY_LEN: printf("ARRAY_LEN"); return (int)(offset + 1);
 
-        /* globals */
         case OP_LOAD_GLOBAL_U16: {
             uint16_t idx = (uint16_t)(ip[1] << 8 | ip[2]);
             printf("LOAD_GLOBAL_U16 %u", idx);
@@ -143,7 +118,6 @@ static int disassemble_instruction_internal(const Bytecode* bc, size_t offset) {
             return (int)(offset + 3);
         }
 
-        /* misc */
         case OP_PRINT: printf("PRINT"); return (int)(offset + 1);
         case OP_BREAK: printf("BREAK"); return (int)(offset + 1);
 
@@ -184,9 +158,6 @@ void disassemble_bytecode(const Bytecode* bc) {
             case CONST_CLOSURE:
                 printf("CLOSURE func=%u upvalues=%u",
                        c->closure.func_idx, c->closure.upvalue_count);
-                break;
-            case CONST_CLASS:
-                printf("CLASS idx=%u", c->class_ref.class_idx);
                 break;
             case CONST_NATIVE_FN:
                 printf("NATIVE_FN %p", c->native_ptr);
