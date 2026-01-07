@@ -8,10 +8,7 @@ fn quicksort(arr, left, right) {
     i = left
     j = right
 
-    print(pivot)
-
     while (i <= j) {
-        print(i, j)
         while (arr[i] < pivot) {
             i = i + 1
         }
@@ -39,13 +36,13 @@ fn quicksort(arr, left, right) {
 fn generate_array(n) {
     arr = []
     for (i = 0; i < n; i = i + 1) {
-        arr.push(random() * 100000)
+        push(arr, random() * 100000)
     }
     return arr
 }
 
 fn test_quicksort() {
-    sizes = [10]
+    sizes = [100, 1000, 10000, 100000, 1000000, 10000000]
 
     for (idx = 0; idx < len(sizes); idx = idx + 1) {
         size = sizes[idx]
@@ -67,7 +64,6 @@ fn test_quicksort() {
             }
         }
         print("Правильно отсортирован:", sorted ? "да" : "нет")
-        print("")
     }
 }
 

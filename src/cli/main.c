@@ -10,7 +10,6 @@ int main(int argc, char *argv[]) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
 #endif
-
     CLIArgs args = parse_args(argc, argv);
     int result = 0;
 
@@ -27,9 +26,6 @@ int main(int argc, char *argv[]) {
         case MODE_DISASM:
             result = disassemble_file(args);
             break;
-        case MODE_REPL:
-            result = start_repl(args);
-            break;
         case MODE_HELP:
             print_usage();
             break;
@@ -41,7 +37,8 @@ int main(int argc, char *argv[]) {
             result = 1;
     }
 
-    printf("Finished with exit code %d", result);
+    printf("Finished with exit code %d\n", result);
+    fflush(stdout);
 
     free(args.input_file);
     free(args.output_file);

@@ -1,7 +1,7 @@
 #ifndef MYTHON_DEBUG_H
 #define MYTHON_DEBUG_H
 
-#include "vm.h"
+#include "runtime/vm.h"
 #include "bytecode.h"
 
 void disassemble_instruction(const Bytecode* bc, size_t offset);

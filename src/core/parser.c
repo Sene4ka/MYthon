@@ -52,7 +52,6 @@ void synchronize(Parser* parser) {
     while (parser->current.type != TOKEN_EOF) {
         if (parser->previous.type == TOKEN_SEMICOLON) return;
         switch (parser->current.type) {
-            case TOKEN_CLASS:
             case TOKEN_FN:
             case TOKEN_LET:
             case TOKEN_FOR:

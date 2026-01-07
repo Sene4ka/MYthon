@@ -15,12 +15,12 @@ set(SOURCE_FILES
         ${SRC_DIR}/utils/memory.c
         ${SRC_DIR}/core/bytecode.c
         ${SRC_DIR}/core/ast.c
-        ${SRC_DIR}/core/vm.c
+        ${SRC_DIR}/runtime/vm.c
+        ${SRC_DIR}/runtime/gc.c
         ${SRC_DIR}/runtime/native.c
         ${SRC_DIR}/cli/cli.c
         ${SRC_DIR}/core/debug.c
         ${SRC_DIR}/core/compiler.c
-        ${SRC_DIR}/cli/repl.c
         ${SRC_DIR}/utils/utils.c
 )
 
@@ -31,10 +31,10 @@ set(HEADER_FILES
         ${SRC_DIR}/core/bytecode.h
         ${SRC_DIR}/core/ast.h
         ${SRC_DIR}/core/compiler.h
-        ${SRC_DIR}/core/vm.h
+        ${SRC_DIR}/runtime/vm.h
+        ${SRC_DIR}/runtime/gc.h
         ${SRC_DIR}/runtime/native.h
         ${SRC_DIR}/cli/cli.h
-        ${SRC_DIR}/cli/repl.h
         ${SRC_DIR}/core/debug.h
         ${SRC_DIR}/utils/utils.h
 )
@@ -57,11 +57,32 @@ if(DEBUG_MEMORY)
     message(STATUS "Memory debugging enabled")
 endif()
 
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    target_compile_options(mython PRIVATE
-            -g -O0 -Wall -Wextra -Werror -pedantic
-    )
-    target_compile_definitions(mython PRIVATE DEBUG=1)
+option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
+if(ENABLE_SANITIZERS)
+    include(CheckCCompilerFlag)
+    check_c_compiler_flag("-fsanitize=address" COMPILER_SUPPORTS_ASAN)
+    
+    if(COMPILER_SUPPORTS_ASAN)
+        set(SANITIZER_FLAGS
+            -fsanitize=address
+            -fsanitize=undefined
+            -fno-omit-frame-pointer
+            -fno-optimize-sibling-calls
+        )
+        message(STATUS "Sanitizers enabled (AddressSanitizer + UBSan)")
+        set(COMPILE_WARNINGS -Wall -Wextra -pedantic)
+    else()
+        message(WARNING "Compiler does not support sanitizers. Install Clang or GCC with sanitizer support.")
+        message(WARNING "For Windows: Download LLVM from https://llvm.org/builds/ and set C/C++ compiler to clang")
+        set(SANITIZER_FLAGS "")
+        set(COMPILE_WARNINGS -Wall -Wextra -Werror -pedantic)
+    endif()
 else()
-    target_compile_options(mython PRIVATE -O2)
+    set(SANITIZER_FLAGS "")
+    set(COMPILE_WARNINGS -Wall -Wextra -Werror -pedantic)
 endif()
+
+target_compile_options(mython PRIVATE -g -O0 ${COMPILE_WARNINGS} ${SANITIZER_FLAGS})
+target_compile_definitions(mython PRIVATE DEBUG=1)
+target_link_options(mython PRIVATE ${SANITIZER_FLAGS})

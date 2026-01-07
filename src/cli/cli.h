@@ -1,4 +1,3 @@
-// cli.h - Add new mode and function declaration
 #ifndef CLI_H
 #define CLI_H
 
@@ -6,7 +5,6 @@ typedef enum {
     MODE_RUN,
     MODE_EXEC,
     MODE_COMPILE,
-    MODE_REPL,
     MODE_HELP,
     MODE_VERSION,
     MODE_DISASM
@@ -16,11 +14,18 @@ typedef struct {
     Mode mode;
     char* input_file;
     char* output_file;
-    int optimize;
-    int debug;
+
+    int debug_parse;
+    int debug_compile;
+    int debug_vm;
+    int debug_gc;
+    int debug_memory;
+
     int verbose;
     int disassemble;
+    int jit;
 } CLIArgs;
+
 
 CLIArgs parse_args(int argc, char** argv);
 void print_usage(void);
