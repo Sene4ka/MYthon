@@ -14,7 +14,6 @@ typedef struct {
 
 static const KeywordEntry keywords[] = {
     {"and", TOKEN_AND},
-    {"class", TOKEN_CLASS},
     {"else", TOKEN_ELSE},
     {"false", TOKEN_FALSE},
     {"for", TOKEN_FOR},
@@ -401,7 +400,6 @@ const char* token_type_to_string(TokenType type) {
         case TOKEN_STRING: return "STRING";
         case TOKEN_NUMBER: return "NUMBER";
         case TOKEN_AND: return "AND";
-        case TOKEN_CLASS: return "CLASS";
         case TOKEN_ELSE: return "ELSE";
         case TOKEN_FALSE: return "FALSE";
         case TOKEN_FOR: return "FOR";

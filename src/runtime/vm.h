@@ -14,8 +14,6 @@ typedef enum {
     VAL_FUNCTION,
     VAL_NATIVE_FN,
     VAL_CLOSURE,
-    VAL_CLASS,
-    VAL_INSTANCE,
     VAL_UPVALUE
 } ValueType;
 
@@ -59,9 +57,6 @@ typedef struct {
     int count;
 } ArrayObject;
 
-struct ClassObject;
-struct InstanceObject;
-
 typedef struct {
     Object obj;
     char* name;
@@ -87,26 +82,6 @@ typedef struct {
     int upvalue_count;
 } ClosureObject;
 
-typedef struct ClassObject {
-    Object obj;
-    StringObject* name;
-
-    StringObject** field_names;
-    int field_count;
-
-    ClosureObject** methods;
-    int method_count;
-} ClassObject;
-
-typedef struct InstanceObject {
-    Object obj;
-    ClassObject* klass;
-
-    Value* fields;
-    int field_count;
-} InstanceObject;
-
-/* value helpers */
 #define IS_NIL(value)        ((value).type == VAL_NIL)
 #define IS_BOOL(value)       ((value).type == VAL_BOOL)
 #define IS_INT(value)        ((value).type == VAL_INT)
@@ -116,8 +91,6 @@ typedef struct InstanceObject {
 #define IS_FUNCTION(value)   ((value).type == VAL_FUNCTION)
 #define IS_NATIVE(value)     ((value).type == VAL_NATIVE_FN)
 #define IS_CLOSURE(value)    ((value).type == VAL_CLOSURE)
-#define IS_CLASS(value)      ((value).type == VAL_CLASS)
-#define IS_INSTANCE(value)   ((value).type == VAL_INSTANCE)
 #define IS_OBJECT(value)     ((value).type >= VAL_STRING)
 
 #define AS_BOOL(value)       ((value).as.boolean)
@@ -129,8 +102,6 @@ typedef struct InstanceObject {
 #define AS_FUNCTION(value)   ((FunctionObject*)AS_OBJECT(value))
 #define AS_NATIVE(value)     ((NativeFunctionObject*)AS_OBJECT(value))
 #define AS_CLOSURE(value)    ((ClosureObject*)AS_OBJECT(value))
-#define AS_CLASS(value)      ((ClassObject*)AS_OBJECT(value))
-#define AS_INSTANCE(value)   ((InstanceObject*)AS_OBJECT(value))
 
 #define BOOL_VAL(b)          ((Value){VAL_BOOL,   {.boolean = (b)}})
 #define INT_VAL(i)           ((Value){VAL_INT,    {.integer = (i)}})
@@ -173,6 +144,7 @@ typedef struct {
     Object* objects;
     size_t bytes_allocated;
     size_t next_gc;
+    int gc_collecting;
 
     int error_count;
     const char* error_message;
@@ -200,43 +172,34 @@ typedef enum {
     INTERPRET_RUNTIME_ERROR
 } InterpretResult;
 
-/* VM lifecycle */
 VM* vm_new(void);
 void vm_free(VM* vm);
 
-/* Interpretation */
-InterpretResult vm_interpret(VM* vm, const char* source);
 InterpretResult vm_run(VM* vm, Bytecode* bytecode);
 
-/* Stack */
 void vm_push(VM* vm, Value value);
 Value vm_pop(VM* vm);
 Value vm_peek(VM* vm, int distance);
 
-/* Call frames */
 void vm_push_frame(VM* vm, Bytecode* bytecode, int slot_count);
 void vm_push_frame_with_ip(VM* vm, Bytecode* bytecode, int slot_count, uint8_t* ip_start);
 void vm_push_frame_with_ip_at(VM* vm, Bytecode* bytecode, int slot_count, uint8_t* ip_start, int slots_offset);
 void vm_pop_frame(VM* vm);
 
-/* Globals / locals */
 void vm_store_global(VM* vm, int index, Value value);
 Value vm_load_global(VM* vm, int index);
 void vm_store_local(VM* vm, int index, Value value);
 Value vm_load_local(VM* vm, int index);
 
-/* Calls: общий вызов по Value (closure/native) */
 Value vm_call_value(VM* vm, Value callee, int arg_count);
 Value vm_call_native(VM* vm, NativeFn function, int arg_count);
 
-/* Errors / debug */
 void vm_runtime_error(VM* vm, const char* format, ...);
 void vm_print_value(Value value);
 const char* vm_value_type_name(Value value);
 int vm_values_equal(Value a, Value b);
 void vm_set_debug(VM* vm, int debug);
 
-/* Object creation */
 StringObject* vm_take_string(VM* vm, char* chars, int length);
 StringObject* vm_copy_string(VM* vm, const char* chars, int length);
 ArrayObject* vm_new_array(VM* vm, int capacity);
@@ -257,18 +220,4 @@ FunctionObject* vm_new_function(VM* vm,
 
 ClosureObject* vm_new_closure(VM* vm, FunctionObject* function);
 
-ClassObject* vm_new_class(VM* vm,
-                          StringObject* name,
-                          int field_count,
-                          int method_count);
-
-InstanceObject* vm_new_instance(VM* vm, ClassObject* klass);
-
-/* GC */
-void vm_mark_roots(VM* vm);
-void vm_collect_garbage(VM* vm);
-void mark_value(VM* vm, Value v);
-void mark_object(VM* vm, Object* obj);
-
-
-#endif /* MYTHON_VM_H */
+#endif

@@ -1,7 +1,7 @@
 #ifndef MYTHON_NATIVE_H
 #define MYTHON_NATIVE_H
 
-#include "core/vm.h"
+#include "vm.h"
 
 typedef struct {
     const char* name;
@@ -17,7 +17,6 @@ int native_get_global_index(const char* name);
 
 void native_register_all(VM* vm);
 
-/* Все нативы тоже принимают VM* */
 Value native_print(VM* vm, int arg_count, Value* args);
 Value native_len(VM* vm, int arg_count, Value* args);
 Value native_array_push(VM* vm, int arg_count, Value* args);

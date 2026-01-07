@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
-#include <ctype.h>
 
 ByteBuffer* read_file_to_buffer(const char* filename) {
     FILE* file = fopen(filename, "rb");

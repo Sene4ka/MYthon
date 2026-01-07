@@ -1,7 +1,5 @@
 #include "bytecode.h"
-
 #include <stdio.h>
-
 #include "utils/memory.h"
 #include <string.h>
 #include <stdlib.h>
@@ -31,26 +29,22 @@ const uint8_t opcode_operand_length[256] = {
     [OP_JUMP_IF_TRUE_U16] = 2,
 
     // Calls
-    [OP_CALL_U8]  = 1,         // argc
-    [OP_CALL_U16] = 2,         // argc (расширенный)
+    [OP_CALL_U8]  = 1,
+    [OP_CALL_U16] = 2,
     [OP_RETURN]   = 0,
     [OP_RETURN_NIL] = 0,
 
-    // Closures / classes
-    [OP_NEW_CLOSURE]   = 0,    // func_idx (U16 в таблице функций)
-    [OP_NEW_CLASS]     = 2,    // class_idx (U16 в таблице классов)
-    [OP_LOAD_FIELD_U8] = 1,    // field_idx
-    [OP_STORE_FIELD_U8]= 1,
-    [OP_CALL_METHOD_U8]= 1,    // method_idx, argc берём из стека/след. опкода по дизайну
+    // Closures
+    [OP_NEW_CLOSURE]   = 0,
 
     // Arrays
-    [OP_ARRAY_NEW_U8] = 1,     // initial size
+    [OP_ARRAY_NEW_U8] = 1,
     [OP_ARRAY_GET]    = 0,
     [OP_ARRAY_SET]    = 0,
     [OP_ARRAY_LEN]    = 0,
 
     // Globals
-    [OP_LOAD_GLOBAL_U16]  = 2, // index
+    [OP_LOAD_GLOBAL_U16]  = 2,
     [OP_STORE_GLOBAL_U16] = 2,
 
     // Debug
@@ -87,10 +81,6 @@ Bytecode* bytecode_new(void) {
     bc->global_count = 0;
     bc->global_capacity = 0;
 
-    bc->classes = NULL;
-    bc->class_capacity = 0;
-    bc->class_count = 0;
-
     bc->main_closure_idx = 0;
     bc->gc_roots = NULL;
     bc->gc_roots_count = 0;
@@ -119,7 +109,6 @@ void bytecode_free(Bytecode* bc) {
     }
     FREE_ARRAY(Function, bc->functions, bc->func_capacity);
 
-    /* globals */
     if (bc->globals) {
         for (size_t i = 0; i < bc->global_count; i++) {
             if (bc->globals[i]) {
@@ -129,19 +118,6 @@ void bytecode_free(Bytecode* bc) {
     }
     FREE_ARRAY(char*, bc->globals, bc->global_capacity);
     FREE_ARRAY(uint16_t, bc->global_const_indices, bc->global_capacity);
-
-    for (size_t i = 0; i < bc->class_count; i++) {
-        for (size_t j = 0; j < bc->classes[i].n_fields; j++) {
-            free(bc->classes[i].field_names[j]);
-        }
-        for (size_t j = 0; j < bc->classes[i].n_methods; j++) {
-            free(bc->classes[i].method_names[j]);
-        }
-        FREE_ARRAY(char*, bc->classes[i].field_names, bc->classes[i].n_fields);
-        FREE_ARRAY(char*, bc->classes[i].method_names, bc->classes[i].n_methods);
-        FREE_ARRAY(uint16_t, bc->classes[i].field_indices, bc->classes[i].n_fields);
-    }
-    FREE_ARRAY(ClassTemplate, bc->classes, bc->class_capacity);
 
     FREE_ARRAY(uint32_t, bc->gc_roots, bc->gc_roots_count);
     free(bc);
@@ -204,7 +180,7 @@ int bc_add_int(Bytecode* bc, int64_t val) {
     Constant* c = &bc->constants[bc->const_count++];
     c->type = CONST_INT;
     c->int_val = val;
-    c->gc_header = 0;  // GC init
+    c->gc_header = 0;
     return (int)(bc->const_count - 1);
 }
 
@@ -250,15 +226,6 @@ int bc_add_closure(Bytecode* bc, uint32_t func_idx, uint16_t n_upvalues) {
     c->type = CONST_CLOSURE;
     c->closure.func_idx = func_idx;
     c->closure.upvalue_count = n_upvalues;
-    c->gc_header = 0;  // GC traceable
-    return (int)(bc->const_count - 1);
-}
-
-int bc_add_class(Bytecode* bc, uint32_t class_idx) {
-    ensure_const_capacity(bc);
-    Constant* c = &bc->constants[bc->const_count++];
-    c->type = CONST_CLASS;
-    c->class_ref.class_idx = class_idx;
     c->gc_header = 0;
     return (int)(bc->const_count - 1);
 }
@@ -346,75 +313,10 @@ int bc_define_global(Bytecode* bc, const char* name, int const_idx) {
     return (int)idx;
 }
 
-static void ensure_class_capacity(Bytecode* bc) {
-    if (bc->class_capacity > bc->class_count) return;
-    size_t old = bc->class_capacity;
-    bc->class_capacity = GROW_CAPACITY(old);
-    bc->classes = GROW_ARRAY(ClassTemplate, bc->classes, old, bc->class_capacity);
-}
-
-uint32_t bc_define_class(Bytecode* bc, const char* name,
-                         uint16_t n_fields, uint16_t n_methods) {
-    ensure_class_capacity(bc);
-
-    uint32_t idx = (uint32_t)bc->class_count++;
-    ClassTemplate* ct = &bc->classes[idx];
-
-    ct->n_fields = n_fields;
-    ct->n_methods = n_methods;
-
-    if (n_fields > 0) {
-        ct->field_names = ALLOCATE(char*, n_fields);
-        ct->field_indices = ALLOCATE(uint16_t, n_fields);
-        for (uint16_t i = 0; i < n_fields; i++) {
-            ct->field_names[i] = NULL;
-            ct->field_indices[i] = 0;
-        }
-    } else {
-        ct->field_names = NULL;
-        ct->field_indices = NULL;
-    }
-
-    if (n_methods > 0) {
-        ct->method_names = ALLOCATE(char*, n_methods);
-        for (uint16_t i = 0; i < n_methods; i++) {
-            ct->method_names[i] = NULL;
-        }
-    } else {
-        ct->method_names = NULL;
-    }
-
-    int name_const = bc_add_string(bc, name);
-    (void)name_const;
-
-    return idx;
-}
-
-void bc_set_field(Bytecode* bc, uint32_t class_idx,
-                  uint16_t field_idx, const char* name, int const_idx) {
-    ClassTemplate* ct = &bc->classes[class_idx];
-    if (field_idx >= ct->n_fields) return;
-
-    size_t len = strlen(name);
-    ct->field_names[field_idx] = (char*)allocate(len + 1);
-    memcpy(ct->field_names[field_idx], name, len + 1);
-    ct->field_indices[field_idx] = (uint16_t)const_idx;
-}
-
-void bc_set_method(Bytecode* bc, uint32_t class_idx,
-                   uint16_t method_idx, const char* name) {
-    ClassTemplate* ct = &bc->classes[class_idx];
-    if (method_idx >= ct->n_methods) return;
-
-    size_t len = strlen(name);
-    ct->method_names[method_idx] = (char*)allocate(len + 1);
-    memcpy(ct->method_names[method_idx], name, len + 1);
-}
-
 void bc_disassemble(Bytecode* bc, const char* name) {
     printf("== Bytecode dump: %s ==\n", name ? name : "<module>");
-    printf("code_size = %zu, consts = %zu, funcs = %zu, classes = %zu\n",
-           bc->code_size, bc->const_count, bc->func_count, bc->class_count);
+    printf("code_size = %zu, consts = %zu, funcs = %zu",
+           bc->code_size, bc->const_count, bc->func_count);
 
     printf("-- Constants --\n");
     for (size_t i = 0; i < bc->const_count; i++) {
@@ -427,9 +329,6 @@ void bc_disassemble(Bytecode* bc, const char* name) {
             case CONST_CLOSURE:
                 printf("CLOSURE func=%u, n_upvalues=%u\n",
                        c->closure.func_idx, c->closure.upvalue_count);
-                break;
-            case CONST_CLASS:
-                printf("CLASS idx=%u\n", c->class_ref.class_idx);
                 break;
             case CONST_NATIVE_FN:
                 printf("NATIVE_FN ptr=%p\n", c->native_ptr);
@@ -450,22 +349,6 @@ void bc_disassemble(Bytecode* bc, const char* name) {
             UpvalueInfo* uv = &fn->upvalues[u];
             printf("  upvalue %u: %s %u\n", u,
                    uv->is_local ? "local" : "upvalue", uv->location);
-        }
-    }
-
-    printf("-- Classes --\n");
-    for (size_t i = 0; i < bc->class_count; i++) {
-        ClassTemplate* ct = &bc->classes[i];
-        printf("class %zu: fields=%u methods=%u\n",
-               i, ct->n_fields, ct->n_methods);
-        for (uint16_t f = 0; f < ct->n_fields; f++) {
-            printf("  field %u: %s (const=%u)\n",
-                   f, ct->field_names[f] ? ct->field_names[f] : "<anon>",
-                   ct->field_indices[f]);
-        }
-        for (uint16_t m = 0; m < ct->n_methods; m++) {
-            printf("  method %u: %s\n",
-                   m, ct->method_names[m] ? ct->method_names[m] : "<anon>");
         }
     }
 
@@ -568,26 +451,6 @@ void bc_disassemble(Bytecode* bc, const char* name) {
                 printf("NEW_CLOSURE");
                 break;
             }
-            case OP_NEW_CLASS: {
-                uint16_t cidx = (uint16_t)((bc->code[ip+1] << 8) | bc->code[ip+2]);
-                printf("NEW_CLASS %u", cidx);
-                break;
-            }
-            case OP_LOAD_FIELD_U8: {
-                uint8_t fidx = bc->code[ip+1];
-                printf("LOAD_FIELD %u", fidx);
-                break;
-            }
-            case OP_STORE_FIELD_U8: {
-                uint8_t fidx = bc->code[ip+1];
-                printf("STORE_FIELD %u", fidx);
-                break;
-            }
-            case OP_CALL_METHOD_U8: {
-                uint8_t midx = bc->code[ip+1];
-                printf("CALL_METHOD %u", midx);
-                break;
-            }
 
             case OP_ARRAY_NEW_U8: {
                 uint8_t sz = bc->code[ip+1];
@@ -626,7 +489,7 @@ int bytecode_save(Bytecode* bc, const char* path) {
     FILE* f = fopen(path, "wb");
     if (!f) return 0;
 
-    uint32_t magic = 0x4D595448; // "MYTH"
+    uint32_t magic = 0x4D595448;
     uint16_t version = 0x0002;
 
     fwrite(&magic, sizeof(uint32_t), 1, f);
@@ -660,12 +523,7 @@ int bytecode_save(Bytecode* bc, const char* path) {
                 fwrite(&c->closure.func_idx, sizeof(uint32_t), 1, f);
                 fwrite(&c->closure.upvalue_count, sizeof(uint16_t), 1, f);
                 break;
-            case CONST_CLASS:
-                fwrite(&c->class_ref.class_idx, sizeof(uint32_t), 1, f);
-                break;
             case CONST_NATIVE_FN:
-                // Нативки не сериализуем; пишем ноль, потом при load = NULL
-                // чтобы не поломать формат.
                 break;
         }
     }
@@ -693,33 +551,6 @@ int bytecode_save(Bytecode* bc, const char* path) {
         }
     }
 
-    uint32_t class_count = (uint32_t)bc->class_count;
-    fwrite(&class_count, sizeof(uint32_t), 1, f);
-    for (uint32_t i = 0; i < class_count; i++) {
-        ClassTemplate* ct = &bc->classes[i];
-        fwrite(&ct->n_fields, sizeof(uint16_t), 1, f);
-        fwrite(&ct->n_methods, sizeof(uint16_t), 1, f);
-
-        for (uint16_t fi = 0; fi < ct->n_fields; fi++) {
-            uint32_t name_len = ct->field_names[fi]
-                ? (uint32_t)strlen(ct->field_names[fi]) : 0;
-            fwrite(&name_len, sizeof(uint32_t), 1, f);
-            if (name_len > 0) {
-                fwrite(ct->field_names[fi], sizeof(char), name_len, f);
-            }
-            fwrite(&ct->field_indices[fi], sizeof(uint16_t), 1, f);
-        }
-
-        for (uint16_t mi = 0; mi < ct->n_methods; mi++) {
-            uint32_t name_len = ct->method_names[mi]
-                ? (uint32_t)strlen(ct->method_names[mi]) : 0;
-            fwrite(&name_len, sizeof(uint32_t), 1, f);
-            if (name_len > 0) {
-                fwrite(ct->method_names[mi], sizeof(char), name_len, f);
-            }
-        }
-    }
-
     fwrite(&bc->main_closure_idx, sizeof(uint32_t), 1, f);
 
     fclose(f);
@@ -743,7 +574,6 @@ Bytecode* bytecode_load(const char* path) {
 
     Bytecode* bc = bytecode_new();
 
-    // code
     uint32_t code_size;
     fread(&code_size, sizeof(uint32_t), 1, f);
     bc->code_size = bc->code_capacity = code_size;
@@ -752,7 +582,6 @@ Bytecode* bytecode_load(const char* path) {
     fread(bc->code, sizeof(uint8_t), code_size, f);
     fread(bc->line_numbers, sizeof(int), code_size, f);
 
-    // constants
     uint32_t const_count;
     fread(&const_count, sizeof(uint32_t), 1, f);
     bc->const_count = bc->const_capacity = const_count;
@@ -781,9 +610,6 @@ Bytecode* bytecode_load(const char* path) {
             case CONST_CLOSURE:
                 fread(&c->closure.func_idx, sizeof(uint32_t), 1, f);
                 fread(&c->closure.upvalue_count, sizeof(uint16_t), 1, f);
-                break;
-            case CONST_CLASS:
-                fread(&c->class_ref.class_idx, sizeof(uint32_t), 1, f);
                 break;
             case CONST_NATIVE_FN:
                 c->native_ptr = NULL;
@@ -829,55 +655,6 @@ Bytecode* bytecode_load(const char* path) {
 
         fn->jit_flags = 0;
         fn->checksum = 0;
-    }
-
-    uint32_t class_count;
-    fread(&class_count, sizeof(uint32_t), 1, f);
-    bc->class_count = bc->class_capacity = class_count;
-    bc->classes = ALLOCATE(ClassTemplate, class_count);
-    for (uint32_t i = 0; i < class_count; i++) {
-        ClassTemplate* ct = &bc->classes[i];
-        memset(ct, 0, sizeof(ClassTemplate));
-
-        fread(&ct->n_fields, sizeof(uint16_t), 1, f);
-        fread(&ct->n_methods, sizeof(uint16_t), 1, f);
-
-        if (ct->n_fields > 0) {
-            ct->field_names = ALLOCATE(char*, ct->n_fields);
-            ct->field_indices = ALLOCATE(uint16_t, ct->n_fields);
-            for (uint16_t fi = 0; fi < ct->n_fields; fi++) {
-                uint32_t name_len;
-                fread(&name_len, sizeof(uint32_t), 1, f);
-                if (name_len > 0) {
-                    ct->field_names[fi] = (char*)allocate(name_len + 1);
-                    fread(ct->field_names[fi], sizeof(char), name_len, f);
-                    ct->field_names[fi][name_len] = '\0';
-                } else {
-                    ct->field_names[fi] = NULL;
-                }
-                fread(&ct->field_indices[fi], sizeof(uint16_t), 1, f);
-            }
-        } else {
-            ct->field_names = NULL;
-            ct->field_indices = NULL;
-        }
-
-        if (ct->n_methods > 0) {
-            ct->method_names = ALLOCATE(char*, ct->n_methods);
-            for (uint16_t mi = 0; mi < ct->n_methods; mi++) {
-                uint32_t name_len;
-                fread(&name_len, sizeof(uint32_t), 1, f);
-                if (name_len > 0) {
-                    ct->method_names[mi] = (char*)allocate(name_len + 1);
-                    fread(ct->method_names[mi], sizeof(char), name_len, f);
-                    ct->method_names[mi][name_len] = '\0';
-                } else {
-                    ct->method_names[mi] = NULL;
-                }
-            }
-        } else {
-            ct->method_names = NULL;
-        }
     }
 
     fread(&bc->main_closure_idx, sizeof(uint32_t), 1, f);

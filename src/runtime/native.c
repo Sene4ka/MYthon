@@ -1,5 +1,5 @@
 #include "native.h"
-#include "core/vm.h"
+#include "vm.h"
 #include "utils/memory.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,7 +58,6 @@ void native_register_all(VM* vm) {
     vm_store_global(vm, 8, OBJECT_VAL(vm_new_native_function(vm, "floor",  native_floor,   1)));
 }
 
-/* ===== Нативные функции с VM* ===== */
 
 Value native_print(VM* vm, int arg_count, Value* args) {
     (void)vm;
@@ -99,7 +98,7 @@ Value native_array_push(VM* vm, int arg_count, Value* args) {
 
     ArrayObject* array = AS_ARRAY(args[0]);
     for (int i = 1; i < arg_count; i++) {
-        vm_array_append(vm, array, args[i]);  // vm, не NULL
+        vm_array_append(vm, array, args[i]);
     }
     return INT_VAL(array->count);
 }
@@ -121,7 +120,7 @@ Value native_typeof(VM* vm, int arg_count, Value* args) {
     }
 
     const char* type_name = vm_value_type_name(args[0]);
-    StringObject* str = vm_copy_string(vm, type_name, strlen(type_name));  // vm, не NULL
+    StringObject* str = vm_copy_string(vm, type_name, strlen(type_name));
     return OBJECT_VAL(str);
 }
 
@@ -148,7 +147,7 @@ Value native_to_string(VM* vm, int arg_count, Value* args) {
         snprintf(buffer, sizeof(buffer), "[%s]", type);
     }
 
-    StringObject* str = vm_copy_string(vm, buffer, strlen(buffer));        // vm, не NULL
+    StringObject* str = vm_copy_string(vm, buffer, strlen(buffer));
     return OBJECT_VAL(str);
 }
 
