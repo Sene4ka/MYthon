@@ -315,7 +315,7 @@ int bc_define_global(Bytecode* bc, const char* name, int const_idx) {
 
 void bc_disassemble(Bytecode* bc, const char* name) {
     printf("== Bytecode dump: %s ==\n", name ? name : "<module>");
-    printf("code_size = %zu, consts = %zu, funcs = %zu",
+    printf("code_size = %zu, consts = %zu, funcs = %zu\n",
            bc->code_size, bc->const_count, bc->func_count);
 
     printf("-- Constants --\n");

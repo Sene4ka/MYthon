@@ -3,6 +3,7 @@
 
 #include "bytecode.h"
 #include <stdint.h>
+#include "jit.h"
 
 typedef enum {
     VAL_NIL,
@@ -123,7 +124,7 @@ typedef struct {
     ClosureObject* closure;
 } CallFrame;
 
-typedef struct {
+typedef struct VM {
     Value* stack;
     int stack_size;
     int stack_capacity;
@@ -145,6 +146,7 @@ typedef struct {
     size_t bytes_allocated;
     size_t next_gc;
     int gc_collecting;
+    int gc_enabled;
 
     int error_count;
     const char* error_message;
@@ -153,6 +155,8 @@ typedef struct {
     int debug;
     int debug_gc;
     DebugLevel debug_level;
+
+    JIT* jit;
 
     int exit_code;
 } VM;
@@ -219,5 +223,13 @@ FunctionObject* vm_new_function(VM* vm,
                                 int func_index);
 
 ClosureObject* vm_new_closure(VM* vm, FunctionObject* function);
+
+Value* vm_get_global(VM* vm, uint16_t index);
+void vm_set_global(VM* vm, uint16_t index, Value* value);
+int vm_call_function(VM* vm, int arg_count);
+void vm_print(VM* vm);
+int vm_array_get(VM* vm);
+int vm_array_set(VM* vm);
+int vm_array_len(VM* vm);
 
 #endif

@@ -1,7 +1,7 @@
 fn a() {
     i = 0
     fn b() {
-        while (i < 10) {
+        while (i < 20) {
             print(i)
             i = i + 1
         }
@@ -10,4 +10,6 @@ fn a() {
 }
 
 c = a()
+c()
+c()
 c()

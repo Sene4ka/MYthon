@@ -1,0 +1,1168 @@
+|.arch x86
+|.actionlist actions
+|.globals lbl_
+|.section code
+
+#ifdef DASM_M_GROW
+#undef DASM_M_GROW
+#endif
+
+#define DASM_M_GROW(D, t, p, sz, need) \
+do { \
+    size_t _sz = (sz), _need = (need); \
+    if (_sz < _need) { \
+        if (_sz < 16) _sz = 16; \
+        while (_sz < _need) _sz += _sz; \
+        void* _new = realloc((p), _sz); \
+        if (!_new) { \
+            fprintf(stderr, "DynASM allocation failed\n"); \
+            abort(); \
+        } \
+        (p) = (t*)_new; \
+        (sz) = _sz; \
+    } \
+} while(0)
+
+#ifdef DASM_M_FREE
+#undef DASM_M_FREE
+#endif
+
+#define DASM_M_FREE(D, p, sz) free(p)
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+#include "dasm_proto.h"
+#include "dasm_x86.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
+
+#include "jit_codegen.h"
+#include "jit.h"
+#include "vm.h"
+#include "bytecode.h"
+
+#define VM_STACK_OFFSET 0
+#define VM_SP_OFFSET 16
+#define VM_FRAMES_OFFSET 24
+#define VM_FRAMECOUNT_OFFSET 32
+
+#define FRAME_BYTECODE_OFFSET 0
+#define FRAME_IP_OFFSET 8
+#define FRAME_SLOTSOFFSET_OFFSET 16
+#define FRAME_SLOTCOUNT_OFFSET 20
+#define FRAME_CLOSURE_OFFSET 24
+#define FRAME_SIZE 48
+
+#define VALUE_TYPE_OFFSET 0
+#define VALUE_DATA_OFFSET 8
+#define VALUE_SIZE 16
+
+#define VAL_NIL 0
+#define VAL_BOOL 1
+#define VAL_INT 2
+#define VAL_FLOAT 3
+#define VAL_STRING 4
+#define VAL_OBJECT 5
+
+// JitCodegen Structure
+struct JitCodegen {
+    dasm_State* d;
+    size_t code_size;
+    int* label_positions;
+    size_t label_capacity;
+    size_t label_count;
+};
+
+JitCodegen* jit_codegen_new(void) {
+    JitCodegen* cg = malloc(sizeof(JitCodegen));
+    if (!cg) return NULL;
+    dasm_init(&cg->d, DASM_MAXSECTION);
+    dasm_setup(&cg->d, actions);
+
+    cg->label_positions = NULL;
+    cg->label_capacity  = 0;
+    cg->label_count     = 0;
+    cg->code_size       = 0;
+    return cg;
+}
+
+void jit_codegen_free(JitCodegen* cg) {
+    if (!cg) return;
+    dasm_free(&cg->d);
+    free(cg->label_positions);
+    free(cg);
+}
+
+// DynASM Macros
+|.if X64
+|.define RVM, rbx
+|.else
+|.define RVM, ebx
+|.endif
+
+// push_value_imm: push immediate type and value
+|.macro push_value_imm, type_val, data_val
+|.if X64
+| mov rax, [RVM + VM_STACK_OFFSET]
+| mov edx, dword [RVM + VM_SP_OFFSET]
+| lea rax, [rax + rdx*VALUE_SIZE]
+| mov dword [rax + VALUE_TYPE_OFFSET], type_val
+| mov qword [rax + VALUE_DATA_OFFSET], data_val
+| inc edx
+| mov dword [RVM + VM_SP_OFFSET], edx
+|.else
+| mov eax, [RVM + VM_STACK_OFFSET]
+| mov edx, dword [RVM + VM_SP_OFFSET]
+| shl edx, 4
+| add eax, edx
+| mov dword [eax + VALUE_TYPE_OFFSET], type_val
+| mov dword [eax + VALUE_DATA_OFFSET], data_val
+| mov dword [eax + VALUE_DATA_OFFSET + 4], 0
+| mov edx, dword [RVM + VM_SP_OFFSET]
+| inc edx
+| mov dword [RVM + VM_SP_OFFSET], edx
+|.endif
+|.endmacro
+
+// push_value_reg: push type from register and value from register
+|.macro push_value_reg, type_reg, data_reg
+|.if X64
+| mov rax, [RVM + VM_STACK_OFFSET]
+| mov edx, dword [RVM + VM_SP_OFFSET]
+| lea rax, [rax + rdx*VALUE_SIZE]
+| mov dword [rax + VALUE_TYPE_OFFSET], type_reg
+| mov qword [rax + VALUE_DATA_OFFSET], data_reg
+| inc edx
+| mov dword [RVM + VM_SP_OFFSET], edx
+|.else
+| mov eax, [RVM + VM_STACK_OFFSET]
+| mov edx, dword [RVM + VM_SP_OFFSET]
+| shl edx, 4
+| add eax, edx
+| mov dword [eax + VALUE_TYPE_OFFSET], type_reg
+| mov dword [eax + VALUE_DATA_OFFSET], data_reg
+| mov edx, dword [RVM + VM_SP_OFFSET]
+| inc edx
+| mov dword [RVM + VM_SP_OFFSET], edx
+|.endif
+|.endmacro
+
+// pop_value: pop type and value into registers
+|.macro pop_value, type_reg, data_reg
+|.if X64
+| mov edx, dword [RVM + VM_SP_OFFSET]
+| dec edx
+| mov dword [RVM + VM_SP_OFFSET], edx
+| mov rax, [RVM + VM_STACK_OFFSET]
+| lea rax, [rax + rdx*VALUE_SIZE]
+| mov type_reg, dword [rax + VALUE_TYPE_OFFSET]
+| mov data_reg, qword [rax + VALUE_DATA_OFFSET]
+|.else
+| mov edx, dword [RVM + VM_SP_OFFSET]
+| dec edx
+| mov dword [RVM + VM_SP_OFFSET], edx
+| mov eax, [RVM + VM_STACK_OFFSET]
+| shl edx, 4
+| add eax, edx
+| mov type_reg, dword [eax + VALUE_TYPE_OFFSET]
+| mov data_reg, dword [eax + VALUE_DATA_OFFSET]
+|.endif
+|.endmacro
+
+// get_local_addr: load address of local variable[idx] into RAX/EAX
+|.macro get_local_addr, idx_val
+|.if X64
+| mov rax, [RVM + VM_FRAMES_OFFSET]
+| mov edx, dword [RVM + VM_FRAMECOUNT_OFFSET]
+| dec edx
+| imul edx, FRAME_SIZE
+| add rax, rdx
+| mov edx, dword [rax + FRAME_SLOTSOFFSET_OFFSET]
+| add edx, idx_val
+| mov rax, [RVM + VM_STACK_OFFSET]
+| lea rax, [rax + rdx*VALUE_SIZE]
+|.else
+| mov eax, [RVM + VM_FRAMES_OFFSET]
+| mov edx, dword [RVM + VM_FRAMECOUNT_OFFSET]
+| dec edx
+| imul edx, FRAME_SIZE
+| add eax, edx
+| mov edx, dword [eax + FRAME_SLOTSOFFSET_OFFSET]
+| add edx, idx_val
+| mov eax, [RVM + VM_STACK_OFFSET]
+| shl edx, 4
+| add eax, edx
+|.endif
+|.endmacro
+
+// Helpers
+
+static int add_label(JitCodegen* cg, size_t insn_index) {
+    if (insn_index >= cg->label_capacity) {
+        size_t new_cap = cg->label_capacity == 0 ? 64 : cg->label_capacity * 2;
+        while (new_cap <= insn_index) new_cap *= 2;
+        int* new_labels = realloc(cg->label_positions, new_cap * sizeof(int));
+        if (!new_labels) return -1;
+        for (size_t i = cg->label_capacity; i < new_cap; i++) {
+            new_labels[i] = -1;
+        }
+        cg->label_positions = new_labels;
+        cg->label_capacity  = new_cap;
+    }
+
+    if (insn_index < cg->label_capacity) {
+        cg->label_positions[insn_index] = 1;
+        if (insn_index >= cg->label_count) {
+            cg->label_count = insn_index + 1;
+        }
+        return 0;
+    }
+    return -1;
+}
+
+// Build instruction map: map absolute offsets to sequential indices
+static size_t build_insn_map(Bytecode* bc, uint32_t func_idx,
+                             uint32_t** out_insn_offsets,
+                             int** out_offset_to_index) {
+    Function* fn = &bc->functions[func_idx];
+    uint32_t start = fn->code_start;
+    uint32_t end   = fn->code_end;
+    uint32_t len   = end - start;
+
+    uint32_t* insn_offsets = malloc(sizeof(uint32_t) * len);
+    int* offset_to_index   = calloc(len, sizeof(int));
+    if (!insn_offsets || !offset_to_index) {
+        free(insn_offsets);
+        free(offset_to_index);
+        *out_insn_offsets = NULL;
+        *out_offset_to_index = NULL;
+        return 0;
+    }
+
+    size_t insn_count = 0;
+    uint32_t ip = start;
+    while (ip < end && insn_count < len) {
+        insn_offsets[insn_count] = ip - start;
+        offset_to_index[ip - start] = (int)insn_count;
+        insn_count++;
+
+        uint8_t op = bc->code[ip];
+        ip += 1 + opcode_operand_length[op];
+    }
+
+    *out_insn_offsets = insn_offsets;
+    *out_offset_to_index = offset_to_index;
+    return insn_count;
+}
+
+// Mark all jump targets as labels
+static void mark_jump_labels(JitCodegen* cg, Bytecode* bc, uint32_t func_idx,
+                             int* offset_to_index, int debug) {
+    Function* fn = &bc->functions[func_idx];
+    uint32_t start = fn->code_start;
+    uint32_t end   = fn->code_end;
+
+    for (uint32_t ip = start; ip < end; ) {
+        uint8_t opcode = bc->code[ip];
+        OpCode op = (OpCode)opcode;
+
+        if (op == OP_JUMP_U16 ||
+            op == OP_JUMP_IF_FALSE_U16 ||
+            op == OP_JUMP_IF_TRUE_U16) {
+
+            int16_t off = (int16_t)((bc->code[ip+1] << 8) | bc->code[ip+2]);
+            uint32_t target = ip + 3 + (int32_t)off;
+            if (target >= start && target < end) {
+                int idx = offset_to_index[target - start];
+                if (idx >= 0 && add_label(cg, (size_t)idx) != 0 && debug) {
+                    fprintf(stderr, "[Codegen] Failed to add label for %d\n", idx);
+                }
+            }
+            ip += 3;
+        } else {
+            ip += 1 + opcode_operand_length[opcode];
+        }
+    }
+}
+
+// Main compilation
+
+JitNativeFunc jit_compile_function(JitCodegen* cg,
+                                   Bytecode* bc,
+                                   uint32_t func_idx,
+                                   int debug)
+{
+    if (!cg || !bc || func_idx >= bc->func_count) return NULL;
+
+    Function* fn = &bc->functions[func_idx];
+    uint32_t* insn_offsets = NULL;
+    int* offset_to_index   = NULL;
+
+    size_t insn_count = build_insn_map(bc, func_idx, &insn_offsets, &offset_to_index);
+    if (insn_count == 0) {
+        free(insn_offsets);
+        free(offset_to_index);
+        return NULL;
+    }
+
+    dasm_State** Dst = &cg->d;
+
+    if (debug) {
+        printf("[Codegen] Compiling func %u (%zu instructions) [%u..%u)\n",
+               func_idx, insn_count, fn->code_start, fn->code_end);
+    }
+
+    // Pass 1: mark jump targets
+    mark_jump_labels(cg, bc, func_idx, offset_to_index, debug);
+
+    // Pass 2: emit code
+    |.code
+
+    // Prologue
+    |.if X64
+    | push rbp
+    | mov rbp, rsp
+    | push rbx
+    | push r12
+    | push r13
+    | push r14
+    | push r15
+    | sub rsp, 64
+    #ifdef _WIN32
+    | mov rbx, rcx      // RVM = vm (Windows x64 calling convention)
+    #else
+    | mov rbx, rdi      // RVM = vm (System V calling convention)
+    #endif
+    |.else
+    | push ebp
+    | mov ebp, esp
+    | push ebx
+    | push esi
+    | push edi
+    | sub esp, 32
+    | mov ebx, [ebp+8]  // RVM = first argument (vm)
+    |.endif
+
+    // Dispatch loop
+    for (size_t i = 0; i < insn_count; i++) {
+        uint32_t ip = fn->code_start + insn_offsets[i];
+        uint8_t opcode = bc->code[ip];
+        OpCode op = (OpCode)opcode;
+
+        // Emit label if this is a jump target
+        if (i < cg->label_count && cg->label_positions[i] != -1) {
+            |=>(i):
+        }
+
+        switch (op) {
+        case OP_NOP:
+            | nop
+            break;
+
+        case OP_HALT:
+            | xor eax, eax
+            | jmp ->cleanup
+            break;
+
+        // Arithmetic
+        case OP_ADD:
+            |.if X64
+            | pop_value r8d, r9      // b
+            | pop_value r10d, r11    // a
+            | add r11, r9
+            | mov r8d, VAL_INT
+            | push_value_reg r8d, r11
+            |.else
+            | pop_value ecx, edx     // b
+            | pop_value ecx, eax     // a
+            | add eax, edx
+            | mov ecx, VAL_INT
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        case OP_SUB:
+            |.if X64
+            | pop_value r8d, r9      // b
+            | pop_value r10d, r11    // a
+            | sub r11, r9
+            | mov r8d, VAL_INT
+            | push_value_reg r8d, r11
+            |.else
+            | pop_value ecx, edx     // b
+            | pop_value ecx, eax     // a
+            | sub eax, edx
+            | mov ecx, VAL_INT
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        case OP_MUL:
+            |.if X64
+            | pop_value r8d, r9      // b
+            | pop_value r10d, r11    // a
+            | imul r11, r9
+            | mov r8d, VAL_INT
+            | push_value_reg r8d, r11
+            |.else
+            | pop_value ecx, edx     // b
+            | pop_value ecx, eax     // a
+            | imul eax, edx
+            | mov ecx, VAL_INT
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        case OP_DIV:
+            |.if X64
+            | pop_value r8d, r9      // b (divisor)
+            | pop_value r10d, r11    // a (dividend)
+            | mov rax, r11
+            | cqo
+            | idiv r9
+            | mov r8d, VAL_INT
+            | push_value_reg r8d, rax
+            |.else
+            | pop_value ecx, edx     // b
+            | pop_value ecx, eax     // a
+            | cdq
+            | idiv edx
+            | mov ecx, VAL_INT
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        case OP_MOD:
+            |.if X64
+            | pop_value r8d, r9      // b (divisor)
+            | pop_value r10d, r11    // a (dividend)
+            | mov rax, r11
+            | cqo
+            | idiv r9
+            | mov r8d, VAL_INT
+            | push_value_reg r8d, rdx
+            |.else
+            | pop_value ecx, edx     // b
+            | pop_value ecx, eax     // a
+            | cdq
+            | idiv edx
+            | mov ecx, VAL_INT
+            | push_value_reg ecx, edx
+            |.endif
+            break;
+
+        case OP_NEG:
+            |.if X64
+            | pop_value r8d, r9
+            | neg r9
+            | push_value_reg r8d, r9
+            |.else
+            | pop_value ecx, eax
+            | neg eax
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        // Logic
+        case OP_NOT:
+            |.if X64
+            | pop_value r8d, r9
+            | test r9, r9
+            | setz al
+            | movzx rax, al
+            | mov r8d, VAL_INT
+            | push_value_reg r8d, rax
+            |.else
+            | pop_value ecx, eax
+            | test eax, eax
+            | setz al
+            | movzx eax, al
+            | mov ecx, VAL_INT
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        case OP_AND:
+            |.if X64
+            | pop_value r8d, r9      // b
+            | pop_value r10d, r11    // a
+            | and r11, r9
+            | mov r8d, VAL_INT
+            | push_value_reg r8d, r11
+            |.else
+            | pop_value ecx, edx     // b
+            | pop_value ecx, eax     // a
+            | and eax, edx
+            | mov ecx, VAL_INT
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        case OP_OR:
+            |.if X64
+            | pop_value r8d, r9      // b
+            | pop_value r10d, r11    // a
+            | or r11, r9
+            | mov r8d, VAL_INT
+            | push_value_reg r8d, r11
+            |.else
+            | pop_value ecx, edx     // b
+            | pop_value ecx, eax     // a
+            | or eax, edx
+            | mov ecx, VAL_INT
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        // Comparisons
+        case OP_EQ:
+            |.if X64
+            | pop_value r8d, r9      // b
+            | pop_value r10d, r11    // a
+            | cmp r11, r9
+            | sete al
+            | movzx rax, al
+            | mov r8d, VAL_INT
+            | push_value_reg r8d, rax
+            |.else
+            | pop_value ecx, edx     // b
+            | pop_value ecx, eax     // a
+            | cmp eax, edx
+            | sete al
+            | movzx eax, al
+            | mov ecx, VAL_INT
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        case OP_NEQ:
+            |.if X64
+            | pop_value r8d, r9
+            | pop_value r10d, r11
+            | cmp r11, r9
+            | setne al
+            | movzx rax, al
+            | mov r8d, VAL_INT
+            | push_value_reg r8d, rax
+            |.else
+            | pop_value ecx, edx
+            | pop_value ecx, eax
+            | cmp eax, edx
+            | setne al
+            | movzx eax, al
+            | mov ecx, VAL_INT
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        case OP_LT:
+            |.if X64
+            | pop_value r8d, r9
+            | pop_value r10d, r11
+            | cmp r11, r9
+            | setl al
+            | movzx rax, al
+            | mov r8d, VAL_INT
+            | push_value_reg r8d, rax
+            |.else
+            | pop_value ecx, edx
+            | pop_value ecx, eax
+            | cmp eax, edx
+            | setl al
+            | movzx eax, al
+            | mov ecx, VAL_INT
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        case OP_LE:
+            |.if X64
+            | pop_value r8d, r9
+            | pop_value r10d, r11
+            | cmp r11, r9
+            | setle al
+            | movzx rax, al
+            | mov r8d, VAL_INT
+            | push_value_reg r8d, rax
+            |.else
+            | pop_value ecx, edx
+            | pop_value ecx, eax
+            | cmp eax, edx
+            | setle al
+            | movzx eax, al
+            | mov ecx, VAL_INT
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        case OP_GT:
+            |.if X64
+            | pop_value r8d, r9
+            | pop_value r10d, r11
+            | cmp r11, r9
+            | setg al
+            | movzx rax, al
+            | mov r8d, VAL_INT
+            | push_value_reg r8d, rax
+            |.else
+            | pop_value ecx, edx
+            | pop_value ecx, eax
+            | cmp eax, edx
+            | setg al
+            | movzx eax, al
+            | mov ecx, VAL_INT
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        case OP_GE:
+            |.if X64
+            | pop_value r8d, r9
+            | pop_value r10d, r11
+            | cmp r11, r9
+            | setge al
+            | movzx rax, al
+            | mov r8d, VAL_INT
+            | push_value_reg r8d, rax
+            |.else
+            | pop_value ecx, edx
+            | pop_value ecx, eax
+            | cmp eax, edx
+            | setge al
+            | movzx eax, al
+            | mov ecx, VAL_INT
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        // Stack operations
+        case OP_DUP:
+            |.if X64
+            | pop_value r8d, r9
+            | push_value_reg r8d, r9
+            | push_value_reg r8d, r9
+            |.else
+            | pop_value ecx, eax
+            | push_value_reg ecx, eax
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+
+        case OP_POP:
+            |.if X64
+            | pop_value r8d, r9
+            |.else
+            | pop_value ecx, eax
+            |.endif
+            break;
+
+        // Constants
+        case OP_LOAD_CONST_U16: {
+            uint16_t idx = (uint16_t)((bc->code[ip+1] << 8) | bc->code[ip+2]);
+            // For simplicity: call VM helper or embed common cases
+            // For now, simple INT case:
+            if (idx < bc->const_count && bc->constants[idx].type == CONST_INT) {
+                int64_t val = bc->constants[idx].int_val;
+                | push_value_imm VAL_INT, val
+            } else {
+                // Fall back to error (not ideal; a better approach calls vm_load_const)
+                | push_value_imm VAL_NIL, 0
+            }
+            break;
+        }
+
+        // Locals
+        case OP_LOAD_LOCAL_U8: {
+            uint8_t idx = bc->code[ip+1];
+            | get_local_addr idx
+            |.if X64
+            | mov ecx, dword [rax + VALUE_TYPE_OFFSET]
+            | mov rdx, qword [rax + VALUE_DATA_OFFSET]
+            | push_value_reg ecx, rdx
+            |.else
+            | mov ecx, dword [eax + VALUE_TYPE_OFFSET]
+            | mov edx, dword [eax + VALUE_DATA_OFFSET]
+            | push_value_reg ecx, edx
+            |.endif
+            break;
+        }
+
+        case OP_STORE_LOCAL_U8: {
+            uint8_t idx = bc->code[ip+1];
+            |.if X64
+            | pop_value ecx, rdx
+            |.else
+            | pop_value ecx, edx
+            |.endif
+            | get_local_addr idx
+            |.if X64
+            | mov dword [rax + VALUE_TYPE_OFFSET], ecx
+            | mov qword [rax + VALUE_DATA_OFFSET], rdx
+            |.else
+            | mov dword [eax + VALUE_TYPE_OFFSET], ecx
+            | mov dword [eax + VALUE_DATA_OFFSET], edx
+            |.endif
+            break;
+        }
+
+        // Globals
+        case OP_LOAD_GLOBAL_U16: {
+            uint16_t idx = (uint16_t)((bc->code[ip+1] << 8) | bc->code[ip+2]);
+            // Call vm_get_global to retrieve value
+            |.if X64
+            #ifdef _WIN32
+            | mov rcx, RVM
+            | mov edx, idx
+            | mov rax, (uintptr_t)vm_get_global
+            | sub rsp, 32
+            | call rax
+            | add rsp, 32
+            #else
+            | mov rdi, RVM
+            | mov esi, idx
+            | mov rax, (uintptr_t)vm_get_global
+            | call rax
+            #endif
+            | mov ecx, dword [rax + VALUE_TYPE_OFFSET]
+            | mov rdx, qword [rax + VALUE_DATA_OFFSET]
+            | push_value_reg ecx, rdx
+            |.else
+            | push idx
+            | push RVM
+            | mov eax, (uintptr_t)vm_get_global
+            | call eax
+            | add esp, 8
+            | mov ecx, dword [eax + VALUE_TYPE_OFFSET]
+            | mov edx, dword [eax + VALUE_DATA_OFFSET]
+            | push_value_reg ecx, edx
+            |.endif
+            break;
+        }
+
+        case OP_STORE_GLOBAL_U16: {
+            uint16_t idx = (uint16_t)((bc->code[ip+1] << 8) | bc->code[ip+2]);
+            |.if X64
+            | pop_value ecx, rdx
+            | sub rsp, 16
+            | mov dword [rsp + VALUE_TYPE_OFFSET], ecx
+            | mov qword [rsp + VALUE_DATA_OFFSET], rdx
+            #ifdef _WIN32
+            | mov rcx, RVM
+            | mov edx, idx
+            | mov r8, rsp
+            | mov rax, (uintptr_t)vm_set_global
+            | sub rsp, 32
+            | call rax
+            | add rsp, 32
+            #else
+            | mov rdi, RVM
+            | mov esi, idx
+            | mov rdx, rsp
+            | mov rax, (uintptr_t)vm_set_global
+            | call rax
+            #endif
+            | add rsp, 16
+            |.else
+            | pop_value ecx, edx
+            | sub esp, 16
+            | mov dword [esp + VALUE_TYPE_OFFSET], ecx
+            | mov dword [esp + VALUE_DATA_OFFSET], edx
+            | push esp
+            | push idx
+            | push RVM
+            | mov eax, (uintptr_t)vm_set_global
+            | call eax
+            | add esp, 20
+            |.endif
+            break;
+        }
+
+        // Control flow
+        case OP_JUMP_U16: {
+            int16_t off = (int16_t)((bc->code[ip+1] << 8) | bc->code[ip+2]);
+            uint32_t target = ip + 3 + (int32_t)off;
+            int t_index = offset_to_index[target - fn->code_start];
+            if (t_index >= 0) {
+                | jmp =>(t_index)
+            }
+            break;
+        }
+
+        case OP_JUMP_IF_FALSE_U16: {
+            int16_t off = (int16_t)((bc->code[ip+1] << 8) | bc->code[ip+2]);
+            uint32_t target = ip + 3 + (int32_t)off;
+            int t_index = offset_to_index[target - fn->code_start];
+            |.if X64
+            | pop_value r8d, r9
+            | test r9, r9
+            |.else
+            | pop_value ecx, eax
+            | test eax, eax
+            |.endif
+            if (t_index >= 0) {
+                | jz =>(t_index)
+            }
+            break;
+        }
+
+        case OP_JUMP_IF_TRUE_U16: {
+            int16_t off = (int16_t)((bc->code[ip+1] << 8) | bc->code[ip+2]);
+            uint32_t target = ip + 3 + (int32_t)off;
+            int t_index = offset_to_index[target - fn->code_start];
+            |.if X64
+            | pop_value r8d, r9
+            | test r9, r9
+            |.else
+            | pop_value ecx, eax
+            | test eax, eax
+            |.endif
+            if (t_index >= 0) {
+                | jnz =>(t_index)
+            }
+            break;
+        }
+
+        // Calls
+        case OP_CALL_U8:
+        case OP_CALL_U16: {
+            int argc;
+            if (op == OP_CALL_U8) {
+                argc = bc->code[ip+1];
+            } else {
+                argc = (int)((bc->code[ip+1] << 8) | bc->code[ip+2]);
+            }
+            // Call vm_call_function (interpreter fallback)
+            |.if X64
+            #ifdef _WIN32
+            | mov rcx, RVM
+            | mov edx, argc
+            | mov rax, (uintptr_t)vm_call_function
+            | sub rsp, 32
+            | call rax
+            | add rsp, 32
+            #else
+            | mov rdi, RVM
+            | mov esi, argc
+            | mov rax, (uintptr_t)vm_call_function
+            | call rax
+            #endif
+            | test eax, eax
+            | jnz ->error
+            |.else
+            | push argc
+            | push RVM
+            | mov eax, (uintptr_t)vm_call_function
+            | call eax
+            | add esp, 8
+            | test eax, eax
+            | jnz ->error
+            |.endif
+            break;
+        }
+
+        case OP_RETURN:
+            | jmp ->exit
+            break;
+
+        case OP_RETURN_NIL:
+            | push_value_imm VAL_NIL, 0
+            | jmp ->exit
+            break;
+
+        // Upvalues
+        case OP_LOAD_UPVALUE_U8: {
+            uint8_t idx = bc->code[ip+1];
+            |.if X64
+            | mov rax, [RVM + VM_FRAMES_OFFSET]
+            | mov edx, dword [RVM + VM_FRAMECOUNT_OFFSET]
+            | dec edx
+            | imul edx, FRAME_SIZE
+            | add rax, rdx
+            | mov rax, [rax + FRAME_CLOSURE_OFFSET]
+            | mov rax, [rax + 24]          // closure->upvalues
+            | mov rax, [rax + idx*8]       // upvalues[idx]
+            | mov rax, [rax + 16]          // upvalue->location
+            | mov ecx, dword [rax + VALUE_TYPE_OFFSET]
+            | mov rdx, qword [rax + VALUE_DATA_OFFSET]
+            | push_value_reg ecx, rdx
+            |.else
+            | mov eax, [RVM + VM_FRAMES_OFFSET]
+            | mov edx, dword [RVM + VM_FRAMECOUNT_OFFSET]
+            | dec edx
+            | imul edx, FRAME_SIZE
+            | add eax, edx
+            | mov eax, [eax + FRAME_CLOSURE_OFFSET]
+            | mov eax, [eax + 12]          // closure->upvalues
+            | mov eax, [eax + idx*4]       // upvalues[idx]
+            | mov eax, [eax + 8]           // upvalue->location
+            | mov ecx, dword [eax + VALUE_TYPE_OFFSET]
+            | mov edx, dword [eax + VALUE_DATA_OFFSET]
+            | push_value_reg ecx, edx
+            |.endif
+            break;
+        }
+
+        case OP_STORE_UPVALUE_U8: {
+            uint8_t idx = bc->code[ip+1];
+            |.if X64
+            | pop_value ecx, rdx
+            | mov rax, [RVM + VM_FRAMES_OFFSET]
+            | mov edi, dword [RVM + VM_FRAMECOUNT_OFFSET]
+            | dec edi
+            | imul edi, FRAME_SIZE
+            | add rax, rdi
+            | mov rax, [rax + FRAME_CLOSURE_OFFSET]
+            | mov rax, [rax + 24]
+            | mov rax, [rax + idx*8]
+            | mov rax, [rax + 16]
+            | mov dword [rax + VALUE_TYPE_OFFSET], ecx
+            | mov qword [rax + VALUE_DATA_OFFSET], rdx
+            |.else
+            | pop_value ecx, edx
+            | mov eax, [RVM + VM_FRAMES_OFFSET]
+            | mov edi, dword [RVM + VM_FRAMECOUNT_OFFSET]
+            | dec edi
+            | imul edi, FRAME_SIZE
+            | add eax, edi
+            | mov eax, [eax + FRAME_CLOSURE_OFFSET]
+            | mov eax, [eax + 12]
+            | mov eax, [eax + idx*4]
+            | mov eax, [eax + 8]
+            | mov dword [eax + VALUE_TYPE_OFFSET], ecx
+            | mov dword [eax + VALUE_DATA_OFFSET], edx
+            |.endif
+            break;
+        }
+
+        // Arrays
+        case OP_ARRAY_NEW_U8: {
+            uint8_t size = bc->code[ip+1];
+            |.if X64
+            #ifdef _WIN32
+            | mov rcx, RVM
+            | mov edx, size
+            | mov rax, (uintptr_t)vm_new_array
+            | sub rsp, 32
+            | call rax
+            | add rsp, 32
+            #else
+            | mov rdi, RVM
+            | mov esi, size
+            | mov rax, (uintptr_t)vm_new_array
+            | call rax
+            #endif
+            | mov ecx, VAL_OBJECT
+            | mov rdx, rax
+            | push_value_reg ecx, rdx
+            |.else
+            | push size
+            | push RVM
+            | mov eax, (uintptr_t)vm_new_array
+            | call eax
+            | add esp, 8
+            | mov ecx, VAL_OBJECT
+            | push_value_reg ecx, eax
+            |.endif
+            break;
+        }
+
+        case OP_ARRAY_GET:
+            // Fall back to VM helper for complex logic
+            |.if X64
+            #ifdef _WIN32
+            | mov rcx, RVM
+            | mov rax, (uintptr_t)vm_array_get
+            | sub rsp, 32
+            | call rax
+            | add rsp, 32
+            #else
+            | mov rdi, RVM
+            | mov rax, (uintptr_t)vm_array_get
+            | call rax
+            #endif
+            | test eax, eax
+            | jnz ->error
+            |.else
+            | push RVM
+            | mov eax, (uintptr_t)vm_array_get
+            | call eax
+            | add esp, 4
+            | test eax, eax
+            | jnz ->error
+            |.endif
+            break;
+
+        case OP_ARRAY_SET:
+            |.if X64
+            #ifdef _WIN32
+            | mov rcx, RVM
+            | mov rax, (uintptr_t)vm_array_set
+            | sub rsp, 32
+            | call rax
+            | add rsp, 32
+            #else
+            | mov rdi, RVM
+            | mov rax, (uintptr_t)vm_array_set
+            | call rax
+            #endif
+            | test eax, eax
+            | jnz ->error
+            |.else
+            | push RVM
+            | mov eax, (uintptr_t)vm_array_set
+            | call eax
+            | add esp, 4
+            | test eax, eax
+            | jnz ->error
+            |.endif
+            break;
+
+        case OP_ARRAY_LEN:
+            |.if X64
+            #ifdef _WIN32
+            | mov rcx, RVM
+            | mov rax, (uintptr_t)vm_array_len
+            | sub rsp, 32
+            | call rax
+            | add rsp, 32
+            #else
+            | mov rdi, RVM
+            | mov rax, (uintptr_t)vm_array_len
+            | call rax
+            #endif
+            | test eax, eax
+            | jnz ->error
+            |.else
+            | push RVM
+            | mov eax, (uintptr_t)vm_array_len
+            | call eax
+            | add esp, 4
+            | test eax, eax
+            | jnz ->error
+            |.endif
+            break;
+
+        // Misc
+        case OP_PRINT:
+            |.if X64
+            #ifdef _WIN32
+            | mov rcx, RVM
+            | mov rax, (uintptr_t)vm_print
+            | sub rsp, 32
+            | call rax
+            | add rsp, 32
+            #else
+            | mov rdi, RVM
+            | mov rax, (uintptr_t)vm_print
+            | call rax
+            #endif
+            |.else
+            | push RVM
+            | mov eax, (uintptr_t)vm_print
+            | call eax
+            | add esp, 4
+            |.endif
+            break;
+
+        case OP_NEW_CLOSURE:
+            // For now: fall back to interpreter via error
+            | jmp ->error
+            break;
+
+        default:
+            if (debug) {
+                fprintf(stderr, "[Codegen] Unsupported opcode 0x%02x at offset %u\n",
+                        opcode, ip);
+            }
+            | jmp ->error
+            break;
+        }
+    }
+
+    // Exit with success
+    |->exit:
+    | xor eax, eax
+    | jmp ->cleanup
+
+    // Exit with error
+    |->error:
+    | mov eax, 1
+
+    // Epilogue
+    |->cleanup:
+    |.if X64
+    | add rsp, 64
+    | pop r15
+    | pop r14
+    | pop r13
+    | pop r12
+    | pop rbx
+    | pop rbp
+    |.else
+    | add esp, 32
+    | pop edi
+    | pop esi
+    | pop ebx
+    | pop ebp
+    |.endif
+    | ret
+
+    // Linking and Allocation
+    size_t size = 0;
+    int err = dasm_link(Dst, &size);
+    if (err != DASM_S_OK) {
+        if (debug) fprintf(stderr, "[Codegen] dasm_link failed: %d\n", err);
+        free(insn_offsets);
+        free(offset_to_index);
+        return NULL;
+    }
+
+    void* code = NULL;
+#ifdef _WIN32
+    code = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!code) {
+        free(insn_offsets);
+        free(offset_to_index);
+        return NULL;
+    }
+#else
+    code = mmap(NULL, size, PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (code == MAP_FAILED) {
+        free(insn_offsets);
+        free(offset_to_index);
+        return NULL;
+    }
+#endif
+
+    dasm_encode(Dst, code);
+
+#ifdef _WIN32
+    DWORD old;
+    VirtualProtect(code, size, PAGE_EXECUTE_READ, &old);
+#else
+    mprotect(code, size, PROT_READ | PROT_EXEC);
+#endif
+
+    cg->code_size = size;
+
+    free(insn_offsets);
+    free(offset_to_index);
+
+    if (debug) {
+        printf("[Codegen] Generated %zu bytes at %p\n", size, code);
+    }
+
+    return (JitNativeFunc)(uintptr_t)code;
+}
+
+size_t jit_codegen_get_size(JitCodegen* cg) {
+    return cg ? cg->code_size : 0;
+}

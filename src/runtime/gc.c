@@ -15,7 +15,7 @@ void* vm_realloc(VM* vm, void* ptr, size_t old_size, size_t new_size) {
     if (new_size > old_size) {
         vm->bytes_allocated += new_size - old_size;
 
-        if (!vm->gc_collecting && vm->bytes_allocated > vm->next_gc) {
+        if (vm->gc_enabled && !vm->gc_collecting && vm->bytes_allocated > vm->next_gc) {
             if (vm->debug_gc) {
                 fprintf(stderr,
                         "[GC-ALLOC] threshold exceeded: bytes=%zu next_gc=%zu\n",
@@ -129,6 +129,8 @@ void mark_object(VM* vm, Object* obj) {
 }
 
 void vm_mark_roots(VM* vm) {
+    if (!vm || !vm->stack) return;
+
     for (int i = 0; i < vm->sp; i++) {
         mark_value(vm, vm->stack[i]);
     }
