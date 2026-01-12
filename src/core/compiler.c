@@ -229,69 +229,86 @@ int compiler_resolve_local(Compiler* compiler, const char* name, int length) {
 }
 
 int compiler_resolve_upvalue(Compiler* compiler, const char* name, int length) {
-    compiler_debug_log(compiler, "resolve_upvalue(\"%.*s\") depth=%d current_func=%d",
+    compiler_debug_log(compiler, "resolve_upvalue(.%s) depth=%d current_func=%d",
                        length, name ? name : "",
                        compiler->function_depth, compiler->current_function);
 
     if (compiler->current_function <= 0) {
-        compiler_debug_log(compiler, "  upvalue: no outer function (current_function=%d)",
-                           compiler->current_function);
+        compiler_debug_log(compiler, "upvalue: no outer function (current_function=%d)",
+                          compiler->current_function);
         return -1;
     }
 
     int outer_index = compiler->current_function - 1;
     if (outer_index < 0 || outer_index >= compiler->function_depth) {
-        compiler_debug_log(compiler, "  upvalue: outer_index out of range (%d)", outer_index);
+        compiler_debug_log(compiler, "upvalue: outer_index out of range %d", outer_index);
         return -1;
     }
 
-    Compiler outer_tmp = *compiler;
-    outer_tmp.current_function = outer_index;
     FunctionState* outer_fs = &compiler->functions[outer_index];
 
-    int local = compiler_resolve_local(&outer_tmp, name, length);
-    if (local >= 0) {
-        compiler_debug_log(compiler, "  upvalue: capture outer local idx=%d", local);
+    int local = -1;
+    for (int i = outer_fs->locals.count - 1; i >= 0; i--) {
+        if ((int)strlen(outer_fs->locals.names[i]) == length &&
+            memcmp(outer_fs->locals.names[i], name, length) == 0) {
+            local = i;
+            break;
+        }
+    }
 
+    if (local >= 0) {
+        compiler_debug_log(compiler, "upvalue: capture outer local idx=%d", local);
         outer_fs->locals.is_captured[local] = 1;
 
         FunctionState* fs = current_function_state(compiler);
+
         for (int i = 0; i < fs->upvalue_count; i++) {
             UpvalueEntry* uv = &fs->upvalues[i];
             if (uv->is_local && uv->index == local) {
-                compiler_debug_log(compiler, "  upvalue: already have idx=%d", i);
+                compiler_debug_log(compiler, "upvalue: already have idx=%d", i);
                 return i;
             }
         }
+
         ensure_upvalue_capacity(fs, fs->upvalue_count + 1);
         int idx = fs->upvalue_count++;
         fs->upvalues[idx].is_local = 1;
         fs->upvalues[idx].index = local;
-        compiler_debug_log(compiler, "  upvalue: new local upvalue idx=%d", idx);
+
+        compiler_debug_log(compiler, "upvalue: new local upvalue idx=%d", idx);
         return idx;
     }
 
-    int up = compiler_resolve_upvalue(&outer_tmp, name, length);
+    int saved_current = compiler->current_function;
+    compiler->current_function = outer_index;
+
+    int up = compiler_resolve_upvalue(compiler, name, length);
+
+    compiler->current_function = saved_current;
+
     if (up >= 0) {
-        compiler_debug_log(compiler, "  upvalue: capture outer upvalue idx=%d", up);
+        compiler_debug_log(compiler, "upvalue: capture outer upvalue idx=%d", up);
 
         FunctionState* fs = current_function_state(compiler);
+
         for (int i = 0; i < fs->upvalue_count; i++) {
             UpvalueEntry* uv = &fs->upvalues[i];
             if (!uv->is_local && uv->index == up) {
-                compiler_debug_log(compiler, "  upvalue: already have idx=%d", i);
+                compiler_debug_log(compiler, "upvalue: already have idx=%d", i);
                 return i;
             }
         }
+
         ensure_upvalue_capacity(fs, fs->upvalue_count + 1);
         int idx = fs->upvalue_count++;
         fs->upvalues[idx].is_local = 0;
         fs->upvalues[idx].index = up;
-        compiler_debug_log(compiler, "  upvalue: new non-local upvalue idx=%d", idx);
+
+        compiler_debug_log(compiler, "upvalue: new non-local upvalue idx=%d", idx);
         return idx;
     }
 
-    compiler_debug_log(compiler, "  upvalue: not found");
+    compiler_debug_log(compiler, "upvalue: not found");
     return -1;
 }
 
@@ -941,6 +958,23 @@ CompileResult compile_assign(Compiler* compiler, const ASTNode* node, Bytecode* 
             emit_u8(compiler, bc, (uint8_t)up);
             return COMPILE_SUCCESS;
         }
+
+        FunctionState* fs = current_function_state(compiler);
+        if (fs && fs->scope_depth > 0) {
+            int local_idx = compiler_add_local(compiler, name, length);
+            if (local_idx < 0) {
+                compiler_error_at_line(compiler, node->line, "Failed to add local");
+                return COMPILE_ERROR;
+            }
+            if (local_idx > 0xFF) {
+                compiler_error_at_line(compiler, node->line, "Too many locals");
+                return COMPILE_ERROR;
+            }
+            emit_op(compiler, bc, OP_STORE_LOCAL_U8);
+            emit_u8(compiler, bc, (uint8_t)local_idx);
+            return COMPILE_SUCCESS;
+        }
+
 
         char buf[256];
         int name_len = length < (int)sizeof(buf)-1 ? length : (int)sizeof(buf)-1;

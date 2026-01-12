@@ -10,6 +10,9 @@
 #include <stdarg.h>
 #include <stddef.h>
 
+#include "jit.h"
+#include "jit_vm_bridge.h"
+
 #define INITIAL_STACK_SIZE 256
 #define INITIAL_FRAMES     64
 #define INITIAL_GLOBALS    256
@@ -57,6 +60,14 @@ static const char* opcode_name(uint8_t opcode) {
         case OP_BREAK:              return "BREAK";
         default:                    return "UNKNOWN";
     }
+}
+
+static void vm_gc_disable(VM* vm) {
+    vm->gc_enabled = 0;
+}
+
+static void vm_gc_enable(VM* vm) {
+    vm->gc_enabled = 1;
 }
 
 void vm_set_debug(VM* vm, int debug) {
@@ -331,6 +342,7 @@ VM* vm_new(void) {
     vm->bytes_allocated = 0;
     vm->next_gc = 1024 * 1024;
     vm->gc_collecting = 0;
+    vm->gc_enabled = 1;
     vm->debug_gc = 0;
     vm->open_upvalues = NULL;
 
@@ -341,18 +353,26 @@ VM* vm_new(void) {
     vm->debug_level = DEBUG_NONE;
     vm->exit_code = 0;
 
+    vm->jit = NULL;
+
     return vm;
 }
 
 void vm_free(VM* vm) {
     if (!vm) return;
 
+    //vm_gc_disable(vm);
+
     FREE_ARRAY(Value, vm->stack, vm->stack_capacity);
     FREE_ARRAY(CallFrame, vm->frames, vm->frame_capacity);
     FREE_ARRAY(Value, vm->globals, vm->global_capacity);
     FREE_ARRAY(Value, vm->constants.values, vm->constants.capacity);
 
-    vm_collect_garbage(vm);
+    //vm_collect_garbage(vm);
+
+    jit_vm_cleanup(vm);
+
+    //vm_gc_enable(vm);
 
     free_ptr(vm);
 }
@@ -527,6 +547,9 @@ StringObject* vm_copy_string(VM* vm, const char* chars, int length) {
 }
 
 ArrayObject* vm_new_array(VM* vm, int capacity) {
+
+    vm_gc_disable(vm);
+
     if (vm->debug_gc) {
         fprintf(stderr, "[GC-OBJ] new ArrayObject cap=%d\n", capacity);
     }
@@ -564,6 +587,9 @@ ArrayObject* vm_new_array(VM* vm, int capacity) {
         arr->items = NULL;
     }
     if (vm->debug_gc) fprintf(stderr, "[GC-OBJ] ArrayObject created");
+
+    vm_gc_enable(vm);
+
     return arr;
 }
 
@@ -598,13 +624,13 @@ void vm_array_append(VM* vm, ArrayObject* array, Value value) {
     array->items[array->count++] = value;
 }
 
-NativeFunctionObject* vm_new_native_function(VM* vm,
-                                             const char* name,
-                                             NativeFn function,
-                                             int arity) {
+NativeFunctionObject* vm_new_native_function(VM* vm, const char* name, NativeFn function, int arity) {
+
     if (vm->debug_gc) {
         fprintf(stderr, "[GC-OBJ] new NativeFn name=%s\n", name);
     }
+
+    vm_gc_disable(vm);
 
     NativeFunctionObject* nf = (NativeFunctionObject*)vm_realloc(
             vm, NULL, 0, sizeof(NativeFunctionObject));
@@ -631,23 +657,26 @@ NativeFunctionObject* vm_new_native_function(VM* vm,
 
     memcpy(nf->name, name, (size_t)len + 1);
 
+    vm_gc_enable(vm);
+
     return nf;
 }
 
 FunctionObject* vm_new_function(VM* vm,
-                                const char* name,
-                                int arity,
-                                int local_count,
-                                int upvalue_count,
-                                Bytecode* bytecode,
-                                int func_index) {
+                               const char* name,
+                               int arity,
+                               int local_count,
+                               int upvalue_count,
+                               Bytecode* bytecode,
+                               int func_index) {
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] new Function name=%s\n", name ? name : "<null>");
+        fprintf(stderr, "[GC-OBJ] new Function name=%s\n", name ? name : "");
     }
 
-    FunctionObject* fn = (FunctionObject*)vm_realloc(
-            vm, NULL, 0, sizeof(FunctionObject));
+    vm_gc_disable(vm);
 
+    FunctionObject* fn = (FunctionObject*)vm_realloc(
+        vm, NULL, 0, sizeof(FunctionObject));
     if (vm->debug_gc) {
         fprintf(stderr, "[GC-OBJ] Function ptr=%p\n", (void*)fn);
     }
@@ -656,55 +685,57 @@ FunctionObject* vm_new_function(VM* vm,
 
     int len = (int)strlen(name);
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ]   name len=%d\n", len);
+        fprintf(stderr, "[GC-OBJ] name len=%d\n", len);
     }
 
     fn->name = (char*)vm_realloc(vm, NULL, 0, (size_t)len + 1);
-
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ]   name ptr=%p\n", (void*)fn->name);
+        fprintf(stderr, "[GC-OBJ] name ptr=%p\n", (void*)fn->name);
     }
 
     memcpy(fn->name, name, (size_t)len + 1);
-
     fn->arity = arity;
     fn->local_count = local_count;
     fn->upvalue_count = upvalue_count;
     fn->bytecode = bytecode;
     fn->func_index = func_index;
 
+    vm_gc_enable(vm);
+
     return fn;
 }
 
+
 ClosureObject* vm_new_closure(VM* vm, FunctionObject* function) {
+    uint8_t upvalue_count = function->upvalue_count;
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] new Closure func=%s\n",
-                function && function->name ? function->name : "<anon>");
+        fprintf(stderr, "[GC-OBJ] new Closure func=%s upvalues=%d\n",
+                function && function->name ? function->name : "",
+                upvalue_count);
     }
 
-    ClosureObject* cl = (ClosureObject*)vm_realloc(
-            vm, NULL, 0, sizeof(ClosureObject));
+    vm_gc_disable(vm);
 
+    ClosureObject* cl = (ClosureObject*)vm_realloc(
+        vm, NULL, 0, sizeof(ClosureObject));
     if (vm->debug_gc) {
         fprintf(stderr, "[GC-OBJ] Closure ptr=%p\n", (void*)cl);
     }
 
     link_object(vm, (Object*)cl, VAL_CLOSURE);
-
     cl->function = function;
-    cl->upvalue_count = function->upvalue_count;
+    cl->upvalue_count = upvalue_count;
 
     if (cl->upvalue_count > 0) {
         if (vm->debug_gc) {
-            fprintf(stderr, "[GC-OBJ]   upvalues count=%d\n",
+            fprintf(stderr, "[GC-OBJ] upvalues count=%d\n",
                     cl->upvalue_count);
         }
 
         cl->upvalues = (Upvalue**)vm_realloc(
-                vm, NULL, 0, sizeof(Upvalue*) * (size_t)cl->upvalue_count);
-
+            vm, NULL, 0, sizeof(Upvalue*) * (size_t)cl->upvalue_count);
         if (vm->debug_gc) {
-            fprintf(stderr, "[GC-OBJ]   upvalues ptr=%p\n",
+            fprintf(stderr, "[GC-OBJ] upvalues ptr=%p\n",
                     (void*)cl->upvalues);
         }
 
@@ -715,8 +746,11 @@ ClosureObject* vm_new_closure(VM* vm, FunctionObject* function) {
         cl->upvalues = NULL;
     }
 
+    vm_gc_enable(vm);
+
     return cl;
 }
+
 
 Value vm_call_native(VM* vm, NativeFn function, int arg_count) {
     int callee_index = vm->sp - 1 - arg_count;
@@ -774,12 +808,17 @@ static Upvalue* vm_capture_upvalue(VM* vm, Value* slot) {
     Upvalue* prev = NULL;
     Upvalue* uv = vm->open_upvalues;
 
+    vm_gc_disable(vm);
+
     while (uv && uv->location > slot) {
         prev = uv;
         uv = uv->next;
     }
 
-    if (uv && uv->location == slot) return uv;
+    if (uv && uv->location == slot) {
+        vm_gc_enable(vm);
+        return uv;
+    }
 
     Upvalue* created = (Upvalue*)vm_realloc(vm, NULL, 0, sizeof(Upvalue));
     link_object(vm, (Object*)created, VAL_UPVALUE);
@@ -791,17 +830,23 @@ static Upvalue* vm_capture_upvalue(VM* vm, Value* slot) {
     if (prev) prev->next = created;
     else vm->open_upvalues = created;
 
+    vm_gc_enable(vm);
     return created;
 }
 
 static void vm_close_upvalues(VM* vm, Value* last) {
+    vm_gc_disable(vm);
+
     while (vm->open_upvalues && vm->open_upvalues->location >= last) {
         Upvalue* uv = vm->open_upvalues;
         uv->closed = *uv->location;
         uv->location = &uv->closed;
         vm->open_upvalues = uv->next;
     }
+
+    vm_gc_enable(vm);
 }
+
 
 static uint16_t read_u16(uint8_t* ip) {
     return (uint16_t)((ip[0] << 8) | ip[1]);
@@ -902,6 +947,7 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
             case OP_ADD: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
+
                 if (IS_INT(a) && IS_INT(b)) {
                     vm_push(vm, INT_VAL(AS_INT(a) + AS_INT(b)));
                 } else if ((IS_INT(a) || IS_FLOAT(a)) &&
@@ -909,15 +955,17 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                     double da = IS_INT(a) ? (double)AS_INT(a) : AS_FLOAT(a);
                     double db = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
                     vm_push(vm, FLOAT_VAL(da + db));
-                } else {
-                    vm_runtime_error(vm, "ADD on non-numbers");
-                    return INTERPRET_RUNTIME_ERROR;
-                }
+                           } else {
+                               vm_runtime_error(vm, "ADD on non-numbers");
+                               return INTERPRET_RUNTIME_ERROR;
+                           }
                 break;
             }
+
             case OP_SUB: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
+
                 if (IS_INT(a) && IS_INT(b)) {
                     vm_push(vm, INT_VAL(AS_INT(a) - AS_INT(b)));
                 } else if ((IS_INT(a) || IS_FLOAT(a)) &&
@@ -926,6 +974,17 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                     double db = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
                     vm_push(vm, FLOAT_VAL(da - db));
                 } else {
+                    printf("[DEBUG SUB] ip=%u\n", *vm->frames[vm->frame_count - 1].ip);
+                    printf("[DEBUG SUB] a=");
+                    vm_print_value(a);
+                    printf(" b=");
+                    vm_print_value(b);
+                    printf("\n");
+
+                    printf("[DEBUG SUB] a_type=%d(%s) b_type=%d(%s)\n",
+                       a.type, vm_value_type_name(a),
+                       b.type, vm_value_type_name(b));
+
                     vm_runtime_error(vm, "SUB on non-numbers");
                     return INTERPRET_RUNTIME_ERROR;
                 }
@@ -934,6 +993,7 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
             case OP_MUL: {
                 Value b = vm_pop(vm);
                 Value a = vm_pop(vm);
+
                 if (IS_INT(a) && IS_INT(b)) {
                     vm_push(vm, INT_VAL(AS_INT(a) * AS_INT(b)));
                 } else if ((IS_INT(a) || IS_FLOAT(a)) &&
@@ -1209,6 +1269,18 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                 int callee_index = vm->sp - 1 - argc;
                 Value callee = vm->stack[callee_index];
 
+                if (IS_CLOSURE(callee)) {
+                    ClosureObject* cl = AS_CLOSURE(callee);
+                    uint32_t func_idx = (uint32_t)cl->function->func_index;
+
+                    bool handled = jit_vm_handle_call(vm, func_idx, frame->bytecode);
+                    if (handled) {
+                        frame = &vm->frames[vm->frame_count - 1];
+                        ip = frame->ip;
+                        break;
+                    }
+                }
+
                 if (vm->debug) {
                     fprintf(stderr,
                             "[CALL] callee_index=%d type=[%s]\n",
@@ -1251,7 +1323,7 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                         return INTERPRET_RUNTIME_ERROR;
                     }
 
-                    int slots_offset = callee_index + 1;
+                    int slots_offset = callee_index;
 
                     if (vm->debug) {
                         fprintf(stderr,
@@ -1263,6 +1335,7 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
                     for (int i = 0; i < argc; i++) {
                         vm->stack[slots_offset + i] = vm->stack[callee_index + 1 + i];
                     }
+
                     vm->sp = slots_offset + argc;
 
                     vm_push_frame_with_ip_at(
@@ -1526,4 +1599,151 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
     }
 
     return INTERPRET_OK;
+}
+
+Value* vm_get_global(VM* vm, uint16_t index) {
+    if (index >= vm->global_count) {
+        vm_runtime_error(vm, "Global variable index out of bounds");
+        static Value nil = NIL_VAL;
+        return &nil;
+    }
+    return &vm->globals[index];
+}
+
+void vm_set_global(VM* vm, uint16_t index, Value* value) {
+    if (index >= vm->global_count) {
+        vm_runtime_error(vm, "Global variable index out of bounds");
+        return;
+    }
+    vm->globals[index] = *value;
+}
+
+int vm_call_function(VM* vm, int arg_count) {
+    int callee_index = vm->sp - 1 - arg_count;
+    Value callee = vm->stack[callee_index];
+
+    if (!IS_CLOSURE(callee)) {
+        vm_runtime_error(vm, "Can only call closures");
+        return 1;
+    }
+
+    ClosureObject* cl = AS_CLOSURE(callee);
+    FunctionObject* fn = cl->function;
+
+    if (arg_count != fn->arity) {
+        vm_runtime_error(vm, "Expected %d arguments but got %d", fn->arity, arg_count);
+        return 1;
+    }
+
+    if (vm->frame_count >= vm->frame_capacity) {
+        vm_runtime_error(vm, "Stack overflow");
+        return 1;
+    }
+
+    int slots_offset = callee_index + 1;
+
+    for (int i = 0; i < arg_count; i++) {
+        vm->stack[slots_offset + i] = vm->stack[callee_index + 1 + i];
+    }
+
+    vm->sp = slots_offset + arg_count;
+
+    vm_push_frame_with_ip_at(vm, fn->bytecode, fn->local_count,
+                             fn->bytecode->code + fn->bytecode->functions[fn->func_index].code_start,
+                             slots_offset);
+
+    CallFrame* new_frame = &vm->frames[vm->frame_count - 1];
+    new_frame->closure = cl;
+
+    return 0;
+}
+
+void vm_print(VM* vm) {
+    if (vm->sp <= 0) return;
+    Value val = vm->stack[--vm->sp];
+    vm_print_value(val);
+    printf("\n");
+}
+
+int vm_array_get(VM* vm) {
+    if (vm->sp < 2) {
+        vm_runtime_error(vm, "Stack underflow in array_get");
+        return 1;
+    }
+
+    Value index_val = vm->stack[--vm->sp];
+    Value array_val = vm->stack[--vm->sp];
+
+    if (!IS_ARRAY(array_val)) {
+        vm_runtime_error(vm, "Array get on non-array");
+        return 1;
+    }
+
+    if (!IS_INT(index_val)) {
+        vm_runtime_error(vm, "Array index must be integer");
+        return 1;
+    }
+
+    ArrayObject* arr = AS_ARRAY(array_val);
+    int idx = (int)AS_INT(index_val);
+
+    if (idx < 0 || idx >= arr->count) {
+        vm_runtime_error(vm, "Array index out of bounds");
+        return 1;
+    }
+
+    vm->stack[vm->sp++] = arr->items[idx];
+    return 0;
+}
+
+int vm_array_set(VM* vm) {
+    if (vm->sp < 3) {
+        vm_runtime_error(vm, "Stack underflow in array_set");
+        return 1;
+    }
+
+    Value value = vm->stack[--vm->sp];
+    Value index_val = vm->stack[--vm->sp];
+    Value array_val = vm->stack[--vm->sp];
+
+    if (!IS_ARRAY(array_val)) {
+        vm_runtime_error(vm, "Array set on non-array");
+        return 1;
+    }
+
+    if (!IS_INT(index_val)) {
+        vm_runtime_error(vm, "Array index must be integer");
+        return 1;
+    }
+
+    ArrayObject* arr = AS_ARRAY(array_val);
+    int idx = (int)AS_INT(index_val);
+
+    if (idx < 0 || idx >= arr->count) {
+        vm_runtime_error(vm, "Array index out of bounds");
+        return 1;
+    }
+
+    arr->items[idx] = value;
+    vm->stack[vm->sp++] = value;
+    return 0;
+}
+
+int vm_array_len(VM* vm) {
+    if (vm->sp < 1) {
+        vm_runtime_error(vm, "Stack underflow in array_len");
+        return 1;
+    }
+
+    Value array_val = vm->stack[--vm->sp];
+
+    if (!IS_ARRAY(array_val)) {
+        vm_runtime_error(vm, "Array len on non-array");
+        return 1;
+    }
+
+    ArrayObject* arr = AS_ARRAY(array_val);
+    vm->stack[vm->sp++] = INT_VAL(arr->count);
+
+    return 0;
 }

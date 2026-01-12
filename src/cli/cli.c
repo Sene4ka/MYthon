@@ -8,8 +8,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include "jit_vm_bridge.h"
 #include "native.h"
+
+extern VM* jit_vm;
 
 CLIArgs parse_args(int argc, char** argv) {
     CLIArgs args;
@@ -22,63 +24,106 @@ CLIArgs parse_args(int argc, char** argv) {
     args.debug_vm      = 0;
     args.debug_gc      = 0;
     args.debug_memory  = 0;
+    args.debug_jit     = 0;
 
     args.verbose    = 0;
     args.disassemble = 0;
-    args.jit        = 0;
+
+    args.jit_enabled = 0;
+    args.jit_opt_level = 2;
+    args.jit_opt_threshold = 10;
+    args.jit_native_threshold = 50;
+    args.jit_stats = 0;
 
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] == '-') {
             if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
                 args.mode = MODE_HELP;
                 return args;
-            } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
+            }
+            if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
                 args.mode = MODE_VERSION;
                 return args;
-            } else if (!strcmp(argv[i], "-c") || !strcmp(argv[i], "--compile")) {
+            }
+            if (!strcmp(argv[i], "-c") || !strcmp(argv[i], "--compile")) {
                 args.mode = MODE_COMPILE;
-                if (i + 1 < argc) {
+                if (i + 1 < argc && argv[i+1][0] != '-') {
                     args.input_file = strdup(argv[++i]);
                 }
-            } else if (!strcmp(argv[i], "-r") || !strcmp(argv[i], "--exec")) {
+            }
+            else if (!strcmp(argv[i], "-r") || !strcmp(argv[i], "--exec")) {
                 args.mode = MODE_EXEC;
-                if (i + 1 < argc) {
+                if (i + 1 < argc && argv[i+1][0] != '-') {
                     args.input_file = strdup(argv[++i]);
                 }
-            } else if (!strcmp(argv[i], "-D") || !strcmp(argv[i], "--disassemble")) {
+            }
+            else if (!strcmp(argv[i], "-D") || !strcmp(argv[i], "--disassemble")) {
                 args.mode = MODE_DISASM;
-                if (i + 1 < argc) {
+                if (i + 1 < argc && argv[i+1][0] != '-') {
                     args.input_file = strdup(argv[++i]);
                 }
-            } else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) {
+            }
+            else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) {
                 if (i + 1 < argc) {
                     args.output_file = strdup(argv[++i]);
                 }
             }
             else if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--debug")) {
-                args.debug_parse   = 1;
+                args.debug_parse = 1;
                 args.debug_compile = 1;
-                args.debug_vm      = 1;
-                args.debug_gc      = 1;
-                args.debug_memory  = 1;
+                args.debug_vm = 1;
+                args.debug_gc = 1;
+                args.debug_jit = 1;
             }
             else if (!strcmp(argv[i], "--debug-parse")) {
                 args.debug_parse = 1;
-            } else if (!strcmp(argv[i], "--debug-compile")) {
+            }
+            else if (!strcmp(argv[i], "--debug-compile")) {
                 args.debug_compile = 1;
-            } else if (!strcmp(argv[i], "--debug-vm")) {
+            }
+            else if (!strcmp(argv[i], "--debug-vm")) {
                 args.debug_vm = 1;
-            } else if (!strcmp(argv[i], "--debug-gc")) {
+            }
+            else if (!strcmp(argv[i], "--debug-gc")) {
                 args.debug_gc = 1;
-            } else if (!strcmp(argv[i], "--debug-memory")) {
-                args.debug_memory = 1;
+            }
+            else if (!strcmp(argv[i], "--debug-jit")) {
+                args.debug_jit = 1;
+            }
+            else if (!strcmp(argv[i], "--jit")) {
+                args.jit_enabled = 1;
+            }
+            else if (!strcmp(argv[i], "--jit-O0")) {
+                args.jit_enabled = 1;
+                args.jit_opt_level = 0;
+            }
+            else if (!strcmp(argv[i], "--jit-O1")) {
+                args.jit_enabled = 1;
+                args.jit_opt_level = 1;
+            }
+            else if (!strcmp(argv[i], "--jit-O2")) {
+                args.jit_enabled = 1;
+                args.jit_opt_level = 2;
+            }
+            else if (!strcmp(argv[i], "--jit-opt-threshold")) {
+                if (i + 1 < argc) {
+                    args.jit_opt_threshold = (uint64_t)atoll(argv[++i]);
+                }
+            }
+            else if (!strcmp(argv[i], "--jit-native-threshold")) {
+                if (i + 1 < argc) {
+                    args.jit_native_threshold = (uint64_t)atoll(argv[++i]);
+                }
+            }
+            else if (!strcmp(argv[i], "--jit-stats")) {
+                args.jit_stats = 1;
             }
             else if (!strcmp(argv[i], "-V") || !strcmp(argv[i], "--verbose")) {
                 args.verbose = 1;
-            } else if (!strcmp(argv[i], "--jit")) {
-                args.jit = 1;
-            } else {
+            }
+            else {
                 fprintf(stderr, "Unknown option: %s\n", argv[i]);
+                fprintf(stderr, "Use -h or --help for usage information\n");
                 exit(1);
             }
         } else {
@@ -91,25 +136,40 @@ CLIArgs parse_args(int argc, char** argv) {
     return args;
 }
 
-
-
 void print_usage(void) {
-    printf("Usage: mython [options] [file]\n");
-    printf("\nOptions:\n");
-    printf("  -h, --help             Show this help\n");
-    printf("  -v, --version          Show version\n");
-    printf("  -c, --compile          Compile to bytecode\n");
-    printf("  -o <file>              Specify output file\n");
-    printf("  -d, --debug            Enable all debug modes\n");
-    printf("      --debug-parse      Debug parser / AST\n");
-    printf("      --debug-compile    Debug compiler / bytecode gen\n");
-    printf("      --debug-vm         Debug VM execution\n");
-    printf("      --debug-gc         Debug GC\n");
-    printf("      --debug-memory     Debug memory allocator\n");
-    printf("  -V, --verbose          Verbose output\n");
-    printf("  -D, --disassemble      Disassemble bytecode\n");
-    printf("      --jit              Enable JIT\n");
+    printf("Usage: mython [mode] [file] [options]\n");
+    printf("\n");
+    printf("Modes:\n");
+    printf("  -c, --compile <file>       Compile source to bytecode\n");
+    printf("  -r, --exec <file>          Execute bytecode file\n");
+    printf("  -D, --disassemble <file>   Disassemble bytecode file\n");
+    printf("\n");
+    printf("Output:\n");
+    printf("  -o <file>                  Specify output file\n");
+    printf("\n");
+    printf("Debugging:\n");
+    printf("  -d, --debug                Enable all debug modes\n");
+    printf("  --debug-parse              Debug parser/AST\n");
+    printf("  --debug-compile            Debug compiler\n");
+    printf("  --debug-vm                 Debug VM execution\n");
+    printf("  --debug-gc                 Debug garbage collector\n");
+    printf("  --debug-jit                Debug JIT compiler\n");
+    printf("\n");
+    printf("JIT Compilation (Tiered):\n");
+    printf("  --jit                      Enable JIT compiler (default: -O2)\n");
+    printf("  --jit-O0                   JIT without optimizations\n");
+    printf("  --jit-O1                   JIT with basic optimizations\n");
+    printf("  --jit-O2                   JIT with all optimizations\n");
+    printf("  --jit-opt-threshold N      Optimize bytecode after N calls (default: 10)\n");
+    printf("  --jit-native-threshold N   Compile to native after N calls (default: 50)\n");
+    printf("  --jit-stats                Show JIT compilation statistics\n");
+    printf("\n");
+    printf("Other:\n");
+    printf("  -V, --verbose              Verbose output\n");
+    printf("  -h, --help                 Show this help\n");
+    printf("  -v, --version              Show version\n");
 }
+
 
 void print_version(void) {
     printf("Mython 1.0.0\n");
@@ -186,6 +246,7 @@ int run_file(CLIArgs args) {
     }
 
     VM* vm = vm_new();
+    jit_vm = vm;
     native_register_all(vm);
 
     if (args.debug_vm) {
@@ -196,7 +257,20 @@ int run_file(CLIArgs args) {
     vm->debug_gc = args.debug_gc;
     vm->next_gc = 1024;
 
-    //vm->jit = args.jit
+    if (args.jit_enabled) {
+        jit_vm_init(vm,
+                    args.debug_jit,
+                    args.jit_opt_threshold,
+                    args.jit_native_threshold,
+                    args.jit_opt_level);
+
+        if (args.verbose && vm->jit) {
+            printf("JIT enabled (opt@%llu, native@%llu, O%d)\n",
+                    args.jit_opt_threshold,
+                    args.jit_native_threshold,
+                    args.jit_opt_level);
+        }
+    }
 
     InterpretResult result = vm_run(vm, bc);
 
@@ -272,11 +346,27 @@ int exec_bytecode_file(CLIArgs args) {
     }
 
     VM* vm = vm_new();
+    jit_vm = vm;
     native_register_all(vm);
 
     if (args.debug_vm) {
         vm_set_debug(vm, 1);
         vm->debug_level = DEBUG_GLOBAL;
+    }
+
+    if (args.jit_enabled) {
+        jit_vm_init(vm,
+                    args.debug_jit,
+                    args.jit_opt_threshold,
+                    args.jit_native_threshold,
+                    args.jit_opt_level);
+
+        if (args.verbose && vm->jit) {
+            printf("JIT enabled (opt@%llu, native@%llu, O%d)\n",
+                    args.jit_opt_threshold,
+                    args.jit_native_threshold,
+                    args.jit_opt_level);
+        }
     }
 
     InterpretResult result = vm_run(vm, bc);

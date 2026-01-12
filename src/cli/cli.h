@@ -1,5 +1,6 @@
 #ifndef CLI_H
 #define CLI_H
+#include <stdint.h>
 
 typedef enum {
     MODE_RUN,
@@ -20,10 +21,16 @@ typedef struct {
     int debug_vm;
     int debug_gc;
     int debug_memory;
+    int debug_jit;
 
     int verbose;
     int disassemble;
-    int jit;
+
+    int jit_enabled;
+    int jit_opt_level;
+    uint64_t jit_opt_threshold;
+    uint64_t jit_native_threshold;
+    int jit_stats;
 } CLIArgs;
 
 

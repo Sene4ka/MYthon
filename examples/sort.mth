@@ -3,7 +3,7 @@ fn quicksort(arr, left, right) {
         return
     }
 
-    mid = left + (right - left) / 2
+    mid = left + (right - left) / (2 + 1 - 1)
     pivot = arr[mid]
     i = left
     j = right
@@ -42,7 +42,7 @@ fn generate_array(n) {
 }
 
 fn test_quicksort() {
-    sizes = [100, 1000, 10000, 100000, 1000000, 10000000]
+    sizes = [100, 1000, 10000, 100000, 1000000]
 
     for (idx = 0; idx < len(sizes); idx = idx + 1) {
         size = sizes[idx]

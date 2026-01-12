@@ -5,6 +5,6 @@ fn factorial(n) {
     return n * factorial(n - 1)
 }
 
-result = factorial(10)
+result = factorial(15)
 print("Факториал 10:")
 print(result)
