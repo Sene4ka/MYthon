@@ -49,7 +49,7 @@ static void bc_remove_bytes(Bytecode* bc, uint32_t func_idx, uint32_t offset, si
             CallFrame* frame = &jit_vm->frames[f];
             if (frame->bytecode == bc &&
                 frame->ip > (bc->code + offset)) {
-                frame->ip -= (uint8_t)remove_size;
+                    frame->ip -= (uint8_t)remove_size;
                 }
         }
     }
@@ -385,7 +385,6 @@ int jit_optimize_bytecode(JIT* jit, Bytecode* bc, uint32_t func_idx) {
     int passes = 0;
     const int max_passes = 3;
 
-    //bc_disassemble(bc, "pre-opt");
 
     while (passes < max_passes) {
         int pass_opts = 0;
@@ -394,8 +393,6 @@ int jit_optimize_bytecode(JIT* jit, Bytecode* bc, uint32_t func_idx) {
 
         total_opts += pass_opts;
         passes++;
-
-        //bc_disassemble(bc, "opt");
 
         if (pass_opts == 0) break;
     }
@@ -473,7 +470,7 @@ void* jit_compile_or_promote(JIT* jit, Bytecode* bc, uint32_t func_idx) {
         return NULL;
     }
 
-    return NULL;
+    //return NULL;
 
     if (target == TIER_NATIVE &&
         (!cf || cf->tier < TIER_NATIVE)) {
@@ -502,6 +499,7 @@ void* jit_compile_or_promote(JIT* jit, Bytecode* bc, uint32_t func_idx) {
         }
 
         JitNativeFunc native_fn = jit_compile_function(cg, bc, func_idx, jit->debug);
+
         if (!native_fn) {
             if (jit->debug) {
                 printf("[JIT Tier-2] Failed to compile function %u\n", func_idx);

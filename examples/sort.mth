@@ -3,7 +3,7 @@ fn quicksort(arr, left, right) {
         return
     }
 
-    mid = left + (right - left) / (2 + 1 - 1)
+    mid = left + (right - left) / 2
     pivot = arr[mid]
     i = left
     j = right

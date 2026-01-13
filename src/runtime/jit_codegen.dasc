@@ -1,4 +1,4 @@
-|.arch x86
+|.arch x64
 |.actionlist actions
 |.globals lbl_
 |.section code
@@ -51,14 +51,14 @@ do { \
 #define VM_STACK_OFFSET 0
 #define VM_SP_OFFSET 16
 #define VM_FRAMES_OFFSET 24
-#define VM_FRAMECOUNT_OFFSET 32
+#define VM_FRAMECOUNT_OFFSET 36
 
+#define FRAME_SIZE 32
 #define FRAME_BYTECODE_OFFSET 0
 #define FRAME_IP_OFFSET 8
 #define FRAME_SLOTSOFFSET_OFFSET 16
 #define FRAME_SLOTCOUNT_OFFSET 20
 #define FRAME_CLOSURE_OFFSET 24
-#define FRAME_SIZE 48
 
 #define VALUE_TYPE_OFFSET 0
 #define VALUE_DATA_OFFSET 8
@@ -83,102 +83,76 @@ struct JitCodegen {
 JitCodegen* jit_codegen_new(void) {
     JitCodegen* cg = malloc(sizeof(JitCodegen));
     if (!cg) return NULL;
+
+    cg->d = NULL;
+
     dasm_init(&cg->d, DASM_MAXSECTION);
+
+    void** globals = (void**)calloc(256, sizeof(void*));
+    if (!globals) {
+        free(cg);
+        return NULL;
+    }
+
+    dasm_setupglobal(&cg->d, globals, 256);
     dasm_setup(&cg->d, actions);
 
     cg->label_positions = NULL;
-    cg->label_capacity  = 0;
-    cg->label_count     = 0;
-    cg->code_size       = 0;
+    cg->label_capacity = 0;
+    cg->label_count = 0;
+    cg->code_size = 0;
+
     return cg;
 }
 
 void jit_codegen_free(JitCodegen* cg) {
     if (!cg) return;
-    dasm_free(&cg->d);
+    if (cg->d) {
+        dasm_free(&cg->d);
+    }
     free(cg->label_positions);
     free(cg);
 }
 
 // DynASM Macros
-|.if X64
 |.define RVM, rbx
-|.else
-|.define RVM, ebx
-|.endif
+
 
 // push_value_imm: push immediate type and value
 |.macro push_value_imm, type_val, data_val
-|.if X64
 | mov rax, [RVM + VM_STACK_OFFSET]
 | mov edx, dword [RVM + VM_SP_OFFSET]
-| lea rax, [rax + rdx*VALUE_SIZE]
+| lea rax, [rax + rdx*16]
 | mov dword [rax + VALUE_TYPE_OFFSET], type_val
 | mov qword [rax + VALUE_DATA_OFFSET], data_val
 | inc edx
 | mov dword [RVM + VM_SP_OFFSET], edx
-|.else
-| mov eax, [RVM + VM_STACK_OFFSET]
-| mov edx, dword [RVM + VM_SP_OFFSET]
-| shl edx, 4
-| add eax, edx
-| mov dword [eax + VALUE_TYPE_OFFSET], type_val
-| mov dword [eax + VALUE_DATA_OFFSET], data_val
-| mov dword [eax + VALUE_DATA_OFFSET + 4], 0
-| mov edx, dword [RVM + VM_SP_OFFSET]
-| inc edx
-| mov dword [RVM + VM_SP_OFFSET], edx
-|.endif
 |.endmacro
 
 // push_value_reg: push type from register and value from register
 |.macro push_value_reg, type_reg, data_reg
-|.if X64
 | mov rax, [RVM + VM_STACK_OFFSET]
 | mov edx, dword [RVM + VM_SP_OFFSET]
-| lea rax, [rax + rdx*VALUE_SIZE]
+| lea rax, [rax + rdx*16]
 | mov dword [rax + VALUE_TYPE_OFFSET], type_reg
 | mov qword [rax + VALUE_DATA_OFFSET], data_reg
 | inc edx
 | mov dword [RVM + VM_SP_OFFSET], edx
-|.else
-| mov eax, [RVM + VM_STACK_OFFSET]
-| mov edx, dword [RVM + VM_SP_OFFSET]
-| shl edx, 4
-| add eax, edx
-| mov dword [eax + VALUE_TYPE_OFFSET], type_reg
-| mov dword [eax + VALUE_DATA_OFFSET], data_reg
-| mov edx, dword [RVM + VM_SP_OFFSET]
-| inc edx
-| mov dword [RVM + VM_SP_OFFSET], edx
-|.endif
 |.endmacro
 
 // pop_value: pop type and value into registers
 |.macro pop_value, type_reg, data_reg
-|.if X64
 | mov edx, dword [RVM + VM_SP_OFFSET]
 | dec edx
 | mov dword [RVM + VM_SP_OFFSET], edx
 | mov rax, [RVM + VM_STACK_OFFSET]
-| lea rax, [rax + rdx*VALUE_SIZE]
+| lea rax, [rax + rdx*16]
 | mov type_reg, dword [rax + VALUE_TYPE_OFFSET]
 | mov data_reg, qword [rax + VALUE_DATA_OFFSET]
-|.else
-| mov edx, dword [RVM + VM_SP_OFFSET]
-| dec edx
-| mov dword [RVM + VM_SP_OFFSET], edx
-| mov eax, [RVM + VM_STACK_OFFSET]
-| shl edx, 4
-| add eax, edx
-| mov type_reg, dword [eax + VALUE_TYPE_OFFSET]
-| mov data_reg, dword [eax + VALUE_DATA_OFFSET]
-|.endif
 |.endmacro
 
 // get_local_addr: load address of local variable[idx] into RAX/EAX
 |.macro get_local_addr, idx_val
-|.if X64
 | mov rax, [RVM + VM_FRAMES_OFFSET]
 | mov edx, dword [RVM + VM_FRAMECOUNT_OFFSET]
 | dec edx
@@ -187,19 +161,7 @@ void jit_codegen_free(JitCodegen* cg) {
 | mov edx, dword [rax + FRAME_SLOTSOFFSET_OFFSET]
 | add edx, idx_val
 | mov rax, [RVM + VM_STACK_OFFSET]
-| lea rax, [rax + rdx*VALUE_SIZE]
-|.else
-| mov eax, [RVM + VM_FRAMES_OFFSET]
-| mov edx, dword [RVM + VM_FRAMECOUNT_OFFSET]
-| dec edx
-| imul edx, FRAME_SIZE
-| add eax, edx
-| mov edx, dword [eax + FRAME_SLOTSOFFSET_OFFSET]
-| add edx, idx_val
-| mov eax, [RVM + VM_STACK_OFFSET]
-| shl edx, 4
-| add eax, edx
-|.endif
+| lea rax, [rax + rdx*16]
 |.endmacro
 
 // Helpers
@@ -313,6 +275,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
     }
 
     dasm_State** Dst = &cg->d;
+    dasm_growpc(&cg->d, (unsigned int)insn_count);
 
     if (debug) {
         printf("[Codegen] Compiling func %u (%zu instructions) [%u..%u)\n",
@@ -326,7 +289,6 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
     |.code
 
     // Prologue
-    |.if X64
     | push rbp
     | mov rbp, rsp
     | push rbx
@@ -340,15 +302,6 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
     #else
     | mov rbx, rdi      // RVM = vm (System V calling convention)
     #endif
-    |.else
-    | push ebp
-    | mov ebp, esp
-    | push ebx
-    | push esi
-    | push edi
-    | sub esp, 32
-    | mov ebx, [ebp+8]  // RVM = first argument (vm)
-    |.endif
 
     // Dispatch loop
     for (size_t i = 0; i < insn_count; i++) {
@@ -373,55 +326,35 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         // Arithmetic
         case OP_ADD:
-            |.if X64
-            | pop_value r8d, r9      // b
-            | pop_value r10d, r11    // a
+            | pop_value r8d, r9       // pop b: r8d=type_b, r9=val_b
+            | pop_value r10d, r11     // pop a: r10d=type_a, r11=val_a
+            | cmp r8d, VAL_INT
+            | jne ->error
+            | cmp r10d, VAL_INT
+            | jne ->error
             | add r11, r9
             | mov r8d, VAL_INT
             | push_value_reg r8d, r11
-            |.else
-            | pop_value ecx, edx     // b
-            | pop_value ecx, eax     // a
-            | add eax, edx
-            | mov ecx, VAL_INT
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
+
         case OP_SUB:
-            |.if X64
             | pop_value r8d, r9      // b
             | pop_value r10d, r11    // a
             | sub r11, r9
             | mov r8d, VAL_INT
             | push_value_reg r8d, r11
-            |.else
-            | pop_value ecx, edx     // b
-            | pop_value ecx, eax     // a
-            | sub eax, edx
-            | mov ecx, VAL_INT
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
         case OP_MUL:
-            |.if X64
             | pop_value r8d, r9      // b
             | pop_value r10d, r11    // a
             | imul r11, r9
             | mov r8d, VAL_INT
             | push_value_reg r8d, r11
-            |.else
-            | pop_value ecx, edx     // b
-            | pop_value ecx, eax     // a
-            | imul eax, edx
-            | mov ecx, VAL_INT
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
         case OP_DIV:
-            |.if X64
             | pop_value r8d, r9      // b (divisor)
             | pop_value r10d, r11    // a (dividend)
             | mov rax, r11
@@ -429,18 +362,9 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | idiv r9
             | mov r8d, VAL_INT
             | push_value_reg r8d, rax
-            |.else
-            | pop_value ecx, edx     // b
-            | pop_value ecx, eax     // a
-            | cdq
-            | idiv edx
-            | mov ecx, VAL_INT
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
         case OP_MOD:
-            |.if X64
             | pop_value r8d, r9      // b (divisor)
             | pop_value r10d, r11    // a (dividend)
             | mov rax, r11
@@ -448,82 +372,42 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | idiv r9
             | mov r8d, VAL_INT
             | push_value_reg r8d, rdx
-            |.else
-            | pop_value ecx, edx     // b
-            | pop_value ecx, eax     // a
-            | cdq
-            | idiv edx
-            | mov ecx, VAL_INT
-            | push_value_reg ecx, edx
-            |.endif
             break;
 
         case OP_NEG:
-            |.if X64
             | pop_value r8d, r9
             | neg r9
             | push_value_reg r8d, r9
-            |.else
-            | pop_value ecx, eax
-            | neg eax
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
         // Logic
         case OP_NOT:
-            |.if X64
             | pop_value r8d, r9
             | test r9, r9
             | setz al
             | movzx rax, al
             | mov r8d, VAL_INT
             | push_value_reg r8d, rax
-            |.else
-            | pop_value ecx, eax
-            | test eax, eax
-            | setz al
-            | movzx eax, al
-            | mov ecx, VAL_INT
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
         case OP_AND:
-            |.if X64
             | pop_value r8d, r9      // b
             | pop_value r10d, r11    // a
             | and r11, r9
             | mov r8d, VAL_INT
             | push_value_reg r8d, r11
-            |.else
-            | pop_value ecx, edx     // b
-            | pop_value ecx, eax     // a
-            | and eax, edx
-            | mov ecx, VAL_INT
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
         case OP_OR:
-            |.if X64
             | pop_value r8d, r9      // b
             | pop_value r10d, r11    // a
             | or r11, r9
             | mov r8d, VAL_INT
             | push_value_reg r8d, r11
-            |.else
-            | pop_value ecx, edx     // b
-            | pop_value ecx, eax     // a
-            | or eax, edx
-            | mov ecx, VAL_INT
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
         // Comparisons
         case OP_EQ:
-            |.if X64
             | pop_value r8d, r9      // b
             | pop_value r10d, r11    // a
             | cmp r11, r9
@@ -531,19 +415,9 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | movzx rax, al
             | mov r8d, VAL_INT
             | push_value_reg r8d, rax
-            |.else
-            | pop_value ecx, edx     // b
-            | pop_value ecx, eax     // a
-            | cmp eax, edx
-            | sete al
-            | movzx eax, al
-            | mov ecx, VAL_INT
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
         case OP_NEQ:
-            |.if X64
             | pop_value r8d, r9
             | pop_value r10d, r11
             | cmp r11, r9
@@ -551,19 +425,9 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | movzx rax, al
             | mov r8d, VAL_INT
             | push_value_reg r8d, rax
-            |.else
-            | pop_value ecx, edx
-            | pop_value ecx, eax
-            | cmp eax, edx
-            | setne al
-            | movzx eax, al
-            | mov ecx, VAL_INT
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
         case OP_LT:
-            |.if X64
             | pop_value r8d, r9
             | pop_value r10d, r11
             | cmp r11, r9
@@ -571,19 +435,9 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | movzx rax, al
             | mov r8d, VAL_INT
             | push_value_reg r8d, rax
-            |.else
-            | pop_value ecx, edx
-            | pop_value ecx, eax
-            | cmp eax, edx
-            | setl al
-            | movzx eax, al
-            | mov ecx, VAL_INT
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
         case OP_LE:
-            |.if X64
             | pop_value r8d, r9
             | pop_value r10d, r11
             | cmp r11, r9
@@ -591,19 +445,9 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | movzx rax, al
             | mov r8d, VAL_INT
             | push_value_reg r8d, rax
-            |.else
-            | pop_value ecx, edx
-            | pop_value ecx, eax
-            | cmp eax, edx
-            | setle al
-            | movzx eax, al
-            | mov ecx, VAL_INT
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
         case OP_GT:
-            |.if X64
             | pop_value r8d, r9
             | pop_value r10d, r11
             | cmp r11, r9
@@ -611,19 +455,9 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | movzx rax, al
             | mov r8d, VAL_INT
             | push_value_reg r8d, rax
-            |.else
-            | pop_value ecx, edx
-            | pop_value ecx, eax
-            | cmp eax, edx
-            | setg al
-            | movzx eax, al
-            | mov ecx, VAL_INT
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
         case OP_GE:
-            |.if X64
             | pop_value r8d, r9
             | pop_value r10d, r11
             | cmp r11, r9
@@ -631,36 +465,17 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | movzx rax, al
             | mov r8d, VAL_INT
             | push_value_reg r8d, rax
-            |.else
-            | pop_value ecx, edx
-            | pop_value ecx, eax
-            | cmp eax, edx
-            | setge al
-            | movzx eax, al
-            | mov ecx, VAL_INT
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
         // Stack operations
         case OP_DUP:
-            |.if X64
             | pop_value r8d, r9
             | push_value_reg r8d, r9
             | push_value_reg r8d, r9
-            |.else
-            | pop_value ecx, eax
-            | push_value_reg ecx, eax
-            | push_value_reg ecx, eax
-            |.endif
             break;
 
         case OP_POP:
-            |.if X64
             | pop_value r8d, r9
-            |.else
-            | pop_value ecx, eax
-            |.endif
             break;
 
         // Constants
@@ -682,33 +497,18 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         case OP_LOAD_LOCAL_U8: {
             uint8_t idx = bc->code[ip+1];
             | get_local_addr idx
-            |.if X64
             | mov ecx, dword [rax + VALUE_TYPE_OFFSET]
             | mov rdx, qword [rax + VALUE_DATA_OFFSET]
             | push_value_reg ecx, rdx
-            |.else
-            | mov ecx, dword [eax + VALUE_TYPE_OFFSET]
-            | mov edx, dword [eax + VALUE_DATA_OFFSET]
-            | push_value_reg ecx, edx
-            |.endif
             break;
         }
 
         case OP_STORE_LOCAL_U8: {
             uint8_t idx = bc->code[ip+1];
-            |.if X64
             | pop_value ecx, rdx
-            |.else
-            | pop_value ecx, edx
-            |.endif
             | get_local_addr idx
-            |.if X64
             | mov dword [rax + VALUE_TYPE_OFFSET], ecx
             | mov qword [rax + VALUE_DATA_OFFSET], rdx
-            |.else
-            | mov dword [eax + VALUE_TYPE_OFFSET], ecx
-            | mov dword [eax + VALUE_DATA_OFFSET], edx
-            |.endif
             break;
         }
 
@@ -716,7 +516,6 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         case OP_LOAD_GLOBAL_U16: {
             uint16_t idx = (uint16_t)((bc->code[ip+1] << 8) | bc->code[ip+2]);
             // Call vm_get_global to retrieve value
-            |.if X64
             #ifdef _WIN32
             | mov rcx, RVM
             | mov edx, idx
@@ -733,22 +532,11 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | mov ecx, dword [rax + VALUE_TYPE_OFFSET]
             | mov rdx, qword [rax + VALUE_DATA_OFFSET]
             | push_value_reg ecx, rdx
-            |.else
-            | push idx
-            | push RVM
-            | mov eax, (uintptr_t)vm_get_global
-            | call eax
-            | add esp, 8
-            | mov ecx, dword [eax + VALUE_TYPE_OFFSET]
-            | mov edx, dword [eax + VALUE_DATA_OFFSET]
-            | push_value_reg ecx, edx
-            |.endif
             break;
         }
 
         case OP_STORE_GLOBAL_U16: {
             uint16_t idx = (uint16_t)((bc->code[ip+1] << 8) | bc->code[ip+2]);
-            |.if X64
             | pop_value ecx, rdx
             | sub rsp, 16
             | mov dword [rsp + VALUE_TYPE_OFFSET], ecx
@@ -769,18 +557,6 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | call rax
             #endif
             | add rsp, 16
-            |.else
-            | pop_value ecx, edx
-            | sub esp, 16
-            | mov dword [esp + VALUE_TYPE_OFFSET], ecx
-            | mov dword [esp + VALUE_DATA_OFFSET], edx
-            | push esp
-            | push idx
-            | push RVM
-            | mov eax, (uintptr_t)vm_set_global
-            | call eax
-            | add esp, 20
-            |.endif
             break;
         }
 
@@ -799,13 +575,8 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             int16_t off = (int16_t)((bc->code[ip+1] << 8) | bc->code[ip+2]);
             uint32_t target = ip + 3 + (int32_t)off;
             int t_index = offset_to_index[target - fn->code_start];
-            |.if X64
             | pop_value r8d, r9
             | test r9, r9
-            |.else
-            | pop_value ecx, eax
-            | test eax, eax
-            |.endif
             if (t_index >= 0) {
                 | jz =>(t_index)
             }
@@ -816,13 +587,8 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             int16_t off = (int16_t)((bc->code[ip+1] << 8) | bc->code[ip+2]);
             uint32_t target = ip + 3 + (int32_t)off;
             int t_index = offset_to_index[target - fn->code_start];
-            |.if X64
             | pop_value r8d, r9
             | test r9, r9
-            |.else
-            | pop_value ecx, eax
-            | test eax, eax
-            |.endif
             if (t_index >= 0) {
                 | jnz =>(t_index)
             }
@@ -838,8 +604,6 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             } else {
                 argc = (int)((bc->code[ip+1] << 8) | bc->code[ip+2]);
             }
-            // Call vm_call_function (interpreter fallback)
-            |.if X64
             #ifdef _WIN32
             | mov rcx, RVM
             | mov edx, argc
@@ -855,15 +619,6 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             #endif
             | test eax, eax
             | jnz ->error
-            |.else
-            | push argc
-            | push RVM
-            | mov eax, (uintptr_t)vm_call_function
-            | call eax
-            | add esp, 8
-            | test eax, eax
-            | jnz ->error
-            |.endif
             break;
         }
 
@@ -879,7 +634,6 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         // Upvalues
         case OP_LOAD_UPVALUE_U8: {
             uint8_t idx = bc->code[ip+1];
-            |.if X64
             | mov rax, [RVM + VM_FRAMES_OFFSET]
             | mov edx, dword [RVM + VM_FRAMECOUNT_OFFSET]
             | dec edx
@@ -892,26 +646,11 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | mov ecx, dword [rax + VALUE_TYPE_OFFSET]
             | mov rdx, qword [rax + VALUE_DATA_OFFSET]
             | push_value_reg ecx, rdx
-            |.else
-            | mov eax, [RVM + VM_FRAMES_OFFSET]
-            | mov edx, dword [RVM + VM_FRAMECOUNT_OFFSET]
-            | dec edx
-            | imul edx, FRAME_SIZE
-            | add eax, edx
-            | mov eax, [eax + FRAME_CLOSURE_OFFSET]
-            | mov eax, [eax + 12]          // closure->upvalues
-            | mov eax, [eax + idx*4]       // upvalues[idx]
-            | mov eax, [eax + 8]           // upvalue->location
-            | mov ecx, dword [eax + VALUE_TYPE_OFFSET]
-            | mov edx, dword [eax + VALUE_DATA_OFFSET]
-            | push_value_reg ecx, edx
-            |.endif
             break;
         }
 
         case OP_STORE_UPVALUE_U8: {
             uint8_t idx = bc->code[ip+1];
-            |.if X64
             | pop_value ecx, rdx
             | mov rax, [RVM + VM_FRAMES_OFFSET]
             | mov edi, dword [RVM + VM_FRAMECOUNT_OFFSET]
@@ -924,27 +663,12 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | mov rax, [rax + 16]
             | mov dword [rax + VALUE_TYPE_OFFSET], ecx
             | mov qword [rax + VALUE_DATA_OFFSET], rdx
-            |.else
-            | pop_value ecx, edx
-            | mov eax, [RVM + VM_FRAMES_OFFSET]
-            | mov edi, dword [RVM + VM_FRAMECOUNT_OFFSET]
-            | dec edi
-            | imul edi, FRAME_SIZE
-            | add eax, edi
-            | mov eax, [eax + FRAME_CLOSURE_OFFSET]
-            | mov eax, [eax + 12]
-            | mov eax, [eax + idx*4]
-            | mov eax, [eax + 8]
-            | mov dword [eax + VALUE_TYPE_OFFSET], ecx
-            | mov dword [eax + VALUE_DATA_OFFSET], edx
-            |.endif
             break;
         }
 
         // Arrays
         case OP_ARRAY_NEW_U8: {
             uint8_t size = bc->code[ip+1];
-            |.if X64
             #ifdef _WIN32
             | mov rcx, RVM
             | mov edx, size
@@ -961,21 +685,11 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | mov ecx, VAL_OBJECT
             | mov rdx, rax
             | push_value_reg ecx, rdx
-            |.else
-            | push size
-            | push RVM
-            | mov eax, (uintptr_t)vm_new_array
-            | call eax
-            | add esp, 8
-            | mov ecx, VAL_OBJECT
-            | push_value_reg ecx, eax
-            |.endif
             break;
         }
 
         case OP_ARRAY_GET:
             // Fall back to VM helper for complex logic
-            |.if X64
             #ifdef _WIN32
             | mov rcx, RVM
             | mov rax, (uintptr_t)vm_array_get
@@ -989,18 +703,9 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             #endif
             | test eax, eax
             | jnz ->error
-            |.else
-            | push RVM
-            | mov eax, (uintptr_t)vm_array_get
-            | call eax
-            | add esp, 4
-            | test eax, eax
-            | jnz ->error
-            |.endif
             break;
 
         case OP_ARRAY_SET:
-            |.if X64
             #ifdef _WIN32
             | mov rcx, RVM
             | mov rax, (uintptr_t)vm_array_set
@@ -1014,18 +719,9 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             #endif
             | test eax, eax
             | jnz ->error
-            |.else
-            | push RVM
-            | mov eax, (uintptr_t)vm_array_set
-            | call eax
-            | add esp, 4
-            | test eax, eax
-            | jnz ->error
-            |.endif
             break;
 
         case OP_ARRAY_LEN:
-            |.if X64
             #ifdef _WIN32
             | mov rcx, RVM
             | mov rax, (uintptr_t)vm_array_len
@@ -1039,19 +735,10 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             #endif
             | test eax, eax
             | jnz ->error
-            |.else
-            | push RVM
-            | mov eax, (uintptr_t)vm_array_len
-            | call eax
-            | add esp, 4
-            | test eax, eax
-            | jnz ->error
-            |.endif
             break;
 
         // Misc
         case OP_PRINT:
-            |.if X64
             #ifdef _WIN32
             | mov rcx, RVM
             | mov rax, (uintptr_t)vm_print
@@ -1063,13 +750,6 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | mov rax, (uintptr_t)vm_print
             | call rax
             #endif
-            |.else
-            | push RVM
-            | mov eax, (uintptr_t)vm_print
-            | call eax
-            | add esp, 4
-            |.endif
-            break;
 
         case OP_NEW_CLOSURE:
             // For now: fall back to interpreter via error
@@ -1097,7 +777,6 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
     // Epilogue
     |->cleanup:
-    |.if X64
     | add rsp, 64
     | pop r15
     | pop r14
@@ -1105,13 +784,6 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
     | pop r12
     | pop rbx
     | pop rbp
-    |.else
-    | add esp, 32
-    | pop edi
-    | pop esi
-    | pop ebx
-    | pop ebp
-    |.endif
     | ret
 
     // Linking and Allocation
