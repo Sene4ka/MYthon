@@ -30,6 +30,7 @@ typedef struct Object Object;
 
 struct Value {
     ValueType type;
+    uint32_t padding;
     union {
         int boolean;
         int64_t integer;
@@ -104,11 +105,11 @@ typedef struct {
 #define AS_NATIVE(value)     ((NativeFunctionObject*)AS_OBJECT(value))
 #define AS_CLOSURE(value)    ((ClosureObject*)AS_OBJECT(value))
 
-#define BOOL_VAL(b)          ((Value){VAL_BOOL,   {.boolean = (b)}})
-#define INT_VAL(i)           ((Value){VAL_INT,    {.integer = (i)}})
-#define FLOAT_VAL(f)         ((Value){VAL_FLOAT,  {.floating = (f)}})
-#define NIL_VAL              ((Value){VAL_NIL,    {.integer = 0}})
-#define OBJECT_VAL(o)        ((Value){((Object*)(o))->type, {.object = (Object*)(o)}})
+#define BOOL_VAL(b)          ((Value){VAL_BOOL,   0, {.boolean = (b)}})
+#define INT_VAL(i)           ((Value){VAL_INT,    0, {.integer = (i)}})
+#define FLOAT_VAL(f)         ((Value){VAL_FLOAT,  0, {.floating = (f)}})
+#define NIL_VAL              ((Value){VAL_NIL,    0, {.integer = 0}})
+#define OBJECT_VAL(o)        ((Value){((Object*)(o))->type, 0, {.object = (Object*)(o)}})
 
 typedef struct {
     Value* values;

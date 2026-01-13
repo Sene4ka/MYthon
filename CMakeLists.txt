@@ -45,7 +45,7 @@ add_custom_command(
         COMMAND ${LUA_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/dynasm/dynasm.lua
         -LN
-        -D x64=1
+        -D X64
         -D WIN32=1
         -I ${CMAKE_CURRENT_SOURCE_DIR}/dynasm
         -o ${GENERATED_C}
@@ -113,7 +113,9 @@ if(DEBUG_MEMORY)
     message(STATUS "Memory debugging enabled")
 endif()
 
-if(CMAKE_C_COMPILER MATCHES "clang" OR CMAKE_CXX_COMPILER MATCHES "clang")
+set(ENABLE_SANITIZERS OFF)
+
+if(CMAKE_C_COMPILER MATCHES "clang" OR CMAKE_CXX_COMPILER MATCHES "clang" AND ENABLE_SANITIZERS)
     message(STATUS "Clang DETECTED: ${CMAKE_C_COMPILER}")
     message(STATUS "ASan/UBSan activated")
 
@@ -130,7 +132,10 @@ if(CMAKE_C_COMPILER MATCHES "clang" OR CMAKE_CXX_COMPILER MATCHES "clang")
             "C:/msys64/clang64/lib/clang/21/lib/windows/libclang_rt.asan_dynamic_runtime_thunk-x86_64.a"
     )
 else()
-    message(WARNING "ASan not found")
+    target_compile_options(mython PRIVATE
+            -g3 -O1 -fno-omit-frame-pointer
+    )
+    message(WARNING "ASan not enabled")
 endif()
 
 target_compile_definitions(mython PRIVATE DEBUG=1)

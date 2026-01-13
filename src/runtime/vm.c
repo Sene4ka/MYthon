@@ -705,7 +705,6 @@ FunctionObject* vm_new_function(VM* vm,
     return fn;
 }
 
-
 ClosureObject* vm_new_closure(VM* vm, FunctionObject* function) {
     uint8_t upvalue_count = function->upvalue_count;
     if (vm->debug_gc) {
@@ -750,7 +749,6 @@ ClosureObject* vm_new_closure(VM* vm, FunctionObject* function) {
 
     return cl;
 }
-
 
 Value vm_call_native(VM* vm, NativeFn function, int arg_count) {
     int callee_index = vm->sp - 1 - arg_count;
@@ -889,6 +887,9 @@ static void vm_load_constants(VM* vm, Bytecode* bc) {
     }
 }
 
+void vm_op_add(VM* vm) {
+
+}
 
 InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
     if (!bytecode) return INTERPRET_RUNTIME_ERROR;

@@ -2,8 +2,8 @@ fn a() {
     i = 0
     fn b() {
         while (i < 20) {
-            print(i)
             i = i + 1
+            print(i)
         }
     }
     return b
