@@ -45,6 +45,11 @@ CLIArgs parse_args(int argc, char** argv) {
                 args.mode = MODE_VERSION;
                 return args;
             }
+            if (!strcmp(argv[i], "--repl")) {
+                args.mode = MODE_RUN;
+                args.input_file = NULL;
+                return args;
+            }
             if (!strcmp(argv[i], "-c") || !strcmp(argv[i], "--compile")) {
                 args.mode = MODE_COMPILE;
                 if (i + 1 < argc && argv[i+1][0] != '-') {
@@ -140,6 +145,7 @@ void print_usage(void) {
     printf("Usage: mython [mode] [file] [options]\n");
     printf("\n");
     printf("Modes:\n");
+    printf("  --repl                    Start interactive REPL\n");
     printf("  -c, --compile <file>       Compile source to bytecode\n");
     printf("  -r, --exec <file>          Execute bytecode file\n");
     printf("  -D, --disassemble <file>   Disassemble bytecode file\n");
@@ -218,6 +224,10 @@ static Bytecode* compile_source(const char* source,
 
 
 int run_file(CLIArgs args) {
+    if (!args.input_file) {
+        return start_repl(args);
+    }
+
     size_t length;
     char* source = read_entire_file(args.input_file, &length);
     if (!source) {
@@ -378,4 +388,76 @@ int exec_bytecode_file(CLIArgs args) {
     vm_free(vm);
     bytecode_free(bc);
     return result == INTERPRET_OK ? 0 : 1;
+}
+
+int start_repl(CLIArgs args) {
+    printf("Mython REPL v1.0.0\n");
+    printf("Type 'exit' to exit, 'help' for help\n");
+
+    VM* vm = vm_new();
+    jit_vm = vm;
+    native_register_all(vm);
+
+    if (args.debug_vm) {
+        vm_set_debug(vm, 1);
+        vm->debug_level = DEBUG_GLOBAL;
+    }
+
+    if (args.jit_enabled) {
+        jit_vm_init(vm,
+                    args.debug_jit,
+                    args.jit_opt_threshold,
+                    args.jit_native_threshold,
+                    args.jit_opt_level);
+    }
+
+    char line[4096];
+    while (1) {
+        printf(">>> ");
+
+        if (!fgets(line, sizeof(line), stdin)) {
+            break;
+        }
+
+        line[strcspn(line, "\n")] = '\0';
+
+        if (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0) {
+            break;
+        }
+
+        if (strcmp(line, "help") == 0) {
+            printf("REPL commands:\n");
+            printf("  exit, quit  - Exit REPL\n");
+            printf("  help        - Show this help\n");
+            printf("  Any valid Mython code\n");
+            continue;
+        }
+
+        if (strlen(line) == 0) {
+            continue;
+        }
+
+        Bytecode* bc = compile_source(
+                line,
+                "<repl>",
+                args.debug_parse,
+                args.debug_compile
+        );
+
+        if (bc) {
+            InterpretResult result = vm_run(vm, bc);
+
+            if (result == INTERPRET_COMPILE_ERROR) {
+                printf("Compile error\n");
+            } else if (result == INTERPRET_RUNTIME_ERROR) {
+                printf("Runtime error\n");
+            }
+
+            bytecode_free(bc);
+        }
+    }
+
+    vm_free(vm);
+    printf("Goodbye!\n");
+    return 0;
 }
