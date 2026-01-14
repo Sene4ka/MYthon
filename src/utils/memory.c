@@ -8,7 +8,7 @@ static size_t total_freed = 0;
 #endif
 
 void* allocate(size_t size) {
-    void* ptr = malloc(size);
+    void* ptr = calloc(1, size);
 
     if (ptr == NULL && size > 0) {
         fprintf(stderr, "Ошибка выделения памяти: %zu байт\n", size);

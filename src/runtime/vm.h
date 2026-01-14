@@ -186,10 +186,61 @@ void vm_push(VM* vm, Value value);
 Value vm_pop(VM* vm);
 Value vm_peek(VM* vm, int distance);
 
+// VM Operation handlers
+
+int vm_op_add(VM* vm);
+int vm_op_sub(VM* vm);
+int vm_op_mul(VM* vm);
+int vm_op_div(VM* vm);
+int vm_op_mod(VM* vm);
+
+int vm_op_neg(VM* vm);
+int vm_op_not(VM* vm);
+
+int vm_op_dup(VM* vm);
+
+int vm_op_eq(VM* vm);
+int vm_op_neq(VM* vm);
+int vm_op_lt(VM* vm);
+int vm_op_le(VM* vm);
+int vm_op_gt(VM* vm);
+int vm_op_ge(VM* vm);
+int vm_op_and(VM* vm);
+int vm_op_or(VM* vm);
+
+int vm_op_load_const_u16(VM* vm, Bytecode* bytecode, CallFrame* frame, uint8_t* ip);
+
+int vm_op_load_local_u8(VM* vm, CallFrame* frame, uint8_t* ip);
+int vm_op_store_local_u8(VM* vm, CallFrame* frame, uint8_t* ip);
+int vm_op_load_upvalue_u8(VM* vm, CallFrame* frame, uint8_t* ip);
+int vm_op_store_upvalue_u8(VM* vm, CallFrame* frame, uint8_t* ip);
+
+int vm_op_jump_u16(VM* vm, CallFrame* frame, uint8_t* ip);
+int vm_op_jump_if_false_u16(VM* vm, CallFrame* frame, uint8_t* ip);
+int vm_op_jump_if_true_u16(VM* vm, CallFrame* frame, uint8_t* ip);
+
+int vm_op_call_u8(VM* vm, CallFrame* frame, uint8_t* ip);
+int vm_op_call_u16(VM* vm, CallFrame* frame, uint8_t* ip);
+
+int vm_op_new_closure(VM* vm, Bytecode* bytecode, CallFrame* frame, uint8_t* ip);
+
+int vm_op_array_new_u8(VM* vm, CallFrame* frame, uint8_t* ip);
+int vm_op_array_get(VM* vm);
+int vm_op_array_set(VM* vm);
+int vm_op_array_len(VM* vm);
+
+int vm_op_load_global_u16(VM* vm, CallFrame* frame, uint8_t* ip);
+int vm_op_store_global_u16(VM* vm, CallFrame* frame, uint8_t* ip);
+
+int vm_op_print(VM* vm);
+
+// Helpers
 void vm_push_frame(VM* vm, Bytecode* bytecode, int slot_count);
 void vm_push_frame_with_ip(VM* vm, Bytecode* bytecode, int slot_count, uint8_t* ip_start);
 void vm_push_frame_with_ip_at(VM* vm, Bytecode* bytecode, int slot_count, uint8_t* ip_start, int slots_offset);
 void vm_pop_frame(VM* vm);
+
+Upvalue* vm_capture_upvalue(VM* vm, Value* slot);
 
 void vm_store_global(VM* vm, int index, Value value);
 Value vm_load_global(VM* vm, int index);
@@ -224,6 +275,10 @@ FunctionObject* vm_new_function(VM* vm,
                                 int func_index);
 
 ClosureObject* vm_new_closure(VM* vm, FunctionObject* function);
+
+void vm_close_upvalues(VM* vm, Value* last);
+
+uint16_t read_u16(uint8_t* ip);
 
 Value* vm_get_global(VM* vm, uint16_t index);
 void vm_set_global(VM* vm, uint16_t index, Value* value);

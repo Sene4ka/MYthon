@@ -60,6 +60,8 @@ typedef struct JIT {
     uint64_t total_calls;
     uint64_t total_optimized;
     uint64_t total_native;
+    uint64_t total_native_executed;
+    uint64_t total_interp_executed;
 } JIT;
 
 JIT*            jit_new(void);
