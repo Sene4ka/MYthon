@@ -176,6 +176,8 @@ static void handle_escape_sequence(Lexer* lexer) {
 }
 
 static Token string(Lexer* lexer, char quote_type) {
+    const unsigned char* string_start = lexer->current;
+
     while (peek(lexer) != quote_type && !is_at_end(lexer)) {
         if (peek(lexer) == '\n') {
             lexer->line++;
@@ -192,8 +194,16 @@ static Token string(Lexer* lexer, char quote_type) {
     if (is_at_end(lexer)) {
         return error_token(lexer, "Unterminated string");
     }
+
+    Token token;
+    token.type = TOKEN_STRING;
+    token.start = string_start;
+    token.length = (size_t)(lexer->current - string_start);
+    token.line = lexer->line;
+    token.column = lexer->column - token.length - 1;
+
     advance(lexer);
-    return make_token(lexer, TOKEN_STRING);
+    return token;
 }
 
 static Token number(Lexer* lexer) {
