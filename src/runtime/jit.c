@@ -127,6 +127,8 @@ JIT* jit_new(void) {
     jit->total_calls = 0;
     jit->total_optimized = 0;
     jit->total_native = 0;
+    jit->total_native_executed = 0;
+    jit->total_interp_executed = 0;
 
     return jit;
 }
@@ -470,8 +472,7 @@ void* jit_compile_or_promote(JIT* jit, Bytecode* bc, uint32_t func_idx) {
         return NULL;
     }
 
-    //return NULL;
-
+    // Tier-2: Compile to native
     if (target == TIER_NATIVE &&
         (!cf || cf->tier < TIER_NATIVE)) {
         cf = ensure_compiled_entry(jit, func_idx);
@@ -482,7 +483,6 @@ void* jit_compile_or_promote(JIT* jit, Bytecode* bc, uint32_t func_idx) {
                 printf("[JIT Tier-2] Skipping native compilation for '%s' (previous attempt failed)\n",
                        func->name ? func->name : "");
             }
-
             return NULL;
         }
 
@@ -495,6 +495,10 @@ void* jit_compile_or_promote(JIT* jit, Bytecode* bc, uint32_t func_idx) {
         JitCodegen* cg = jit_codegen_new();
         if (!cg) {
             cf->native_failed = 1;
+            if (jit->debug) {
+                printf("[JIT Tier-2] Failed to create codegen for '%s' (hotness=%llu)",
+                    func->name ? func->name : "", (unsigned long long)jit->hotness_counters[func_idx]);
+            }
             return NULL;
         }
 
@@ -504,7 +508,6 @@ void* jit_compile_or_promote(JIT* jit, Bytecode* bc, uint32_t func_idx) {
             if (jit->debug) {
                 printf("[JIT Tier-2] Failed to compile function %u\n", func_idx);
             }
-
             cf->native_failed = 1;
             jit_codegen_free(cg);
             return NULL;
@@ -527,7 +530,7 @@ void* jit_compile_or_promote(JIT* jit, Bytecode* bc, uint32_t func_idx) {
         return (void*)native_fn;
     }
 
-    return NULL;
+    return cf ? cf->native_code : NULL;
 }
 
 int jit_is_native(JIT* jit, uint32_t func_idx) {
@@ -548,11 +551,19 @@ void jit_print_stats(JIT* jit) {
     if (!jit) return;
 
     printf("[JIT Statistics]\n");
-    printf(" Total calls: %llu\n", (unsigned long long)jit->total_calls);
-    printf(" Tier 1 (optimized): %llu\n", (unsigned long long)jit->total_optimized);
-    printf(" Tier 2 (native): %llu\n", (unsigned long long)jit->total_native);
-    printf(" Compiled functions: %zu\n", jit->compiled_count);
+    printf(" Total function calls: %llu\n", (unsigned long long)jit->total_calls);
+    printf(" Executed via native:  %llu (%.1f%%)\n",
+           (unsigned long long)jit->total_native_executed,
+           jit->total_calls > 0 ? (100.0 * jit->total_native_executed / jit->total_calls) : 0.0);
+    printf(" Executed via interp:  %llu (%.1f%%)\n",
+           (unsigned long long)jit->total_interp_executed,
+           jit->total_calls > 0 ? (100.0 * jit->total_interp_executed / jit->total_calls) : 0.0);
+    printf("\n");
+    printf(" Tier-1 optimized:     %llu functions\n", (unsigned long long)jit->total_optimized);
+    printf(" Tier-2 compiled:      %llu functions\n", (unsigned long long)jit->total_native);
+    printf(" Total compiled funcs: %zu\n", jit->compiled_count);
 }
+
 
 void jit_set_debug(JIT* jit, int level) {
     if (jit) jit->debug = level;
