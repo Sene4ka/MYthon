@@ -8,7 +8,7 @@ typedef struct JitCodegen JitCodegen;
 
 typedef int (*JitNativeFunc)(VM* vm);
 
-JitCodegen* jit_codegen_new(void);
+JitCodegen* jit_codegen_new(int debug);
 void jit_codegen_free(JitCodegen* cg);
 
 JitNativeFunc jit_compile_function(JitCodegen* cg,

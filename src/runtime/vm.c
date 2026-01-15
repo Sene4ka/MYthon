@@ -310,11 +310,6 @@ VM* vm_new(void) {
     VM* vm = ALLOCATE(VM, 1);
     memset(vm, 0, sizeof(VM));
 
-    printf("[DEBUG] VM allocated at %p\n", (void*)vm);
-    printf("[DEBUG] open_upvalues offset: 0x%zx\n", offsetof(VM, open_upvalues));
-    printf("[DEBUG] open_upvalues address: %p\n", (void*)&vm->open_upvalues);
-    printf("[DEBUG] Before init: open_upvalues = %p\n", (void*)vm->open_upvalues);
-
     vm->stack_capacity = INITIAL_STACK_SIZE;
     vm->stack = ALLOCATE(Value, vm->stack_capacity);
     vm->sp = 0;
@@ -360,9 +355,6 @@ VM* vm_new(void) {
     vm->exit_code = 0;
 
     vm->jit = NULL;
-
-    printf("[DEBUG] After init: open_upvalues = %p\n", (void*)vm->open_upvalues);
-    printf("[DEBUG] After init: vm = %p\n", (void*)vm);
 
     return vm;
 }
@@ -507,9 +499,7 @@ Value vm_load_local(VM* vm, int index) {
     CallFrame* frame = &vm->frames[vm->frame_count - 1];
 
     int stack_index = frame->slots_offset + index;
-
     Value result = vm->stack[stack_index];
-
     return result;
 }
 
@@ -1149,21 +1139,7 @@ int vm_op_load_const_u16(VM* vm, Bytecode* bytecode, CallFrame* frame, uint8_t* 
 
 
 int vm_op_load_local_u8(VM* vm, CallFrame* frame, uint8_t* ip) {
-    //printf("[vm_op_load_local_u8 ENTRY] vm=%p, frame=%p, ip=%p\n", vm, frame, ip);
-
-    // Проверка валидности VM
-    /*if ((uintptr_t)vm < 0x400000 || (uintptr_t)vm > 0x7FFFFFFF) {
-        printf("  ERROR: vm pointer is invalid!\n");
-        return -1;
-    }*/
-
-    /*if (vm->stack == NULL) {
-        printf("  ERROR: vm->stack is NULL!\n");
-        return -1;
-    }*/
-
     uint8_t idx = *ip++;
-    //printf("  idx=%u\n", idx);
     frame->ip = ip;
     vm_push(vm, vm_load_local(vm, (int)idx));
     return 0;
@@ -1242,6 +1218,125 @@ int vm_op_jump_if_true_u16(VM* vm, CallFrame* frame, uint8_t* ip) {
     return 0;
 }
 
+static int vm_run_frame_to_completion(VM* vm, int target_frame_count, Bytecode* initial_bytecode) {
+    (void)initial_bytecode;
+    
+    while (vm->frame_count > target_frame_count) {
+        if (vm->frame_count == 0) break;
+        CallFrame* frame = &vm->frames[vm->frame_count - 1];
+        Bytecode* bytecode = frame->bytecode;
+        uint8_t* ip = frame->ip;
+        uint8_t opcode = *ip++;
+        frame->ip = ip;
+
+        int op_res = 0;
+        switch ((OpCode)opcode) {
+            case OP_ADD: op_res = vm_op_add(vm); break;
+            case OP_SUB: op_res = vm_op_sub(vm); break;
+            case OP_MUL: op_res = vm_op_mul(vm); break;
+            case OP_DIV: op_res = vm_op_div(vm); break;
+            case OP_MOD: op_res = vm_op_mod(vm); break;
+            case OP_NEG: op_res = vm_op_neg(vm); break;
+            case OP_NOT: op_res = vm_op_not(vm); break;
+            case OP_EQ:  op_res = vm_op_eq(vm); break;
+            case OP_NEQ: op_res = vm_op_neq(vm); break;
+            case OP_LT:  op_res = vm_op_lt(vm); break;
+            case OP_LE:  op_res = vm_op_le(vm); break;
+            case OP_GT:  op_res = vm_op_gt(vm); break;
+            case OP_GE:  op_res = vm_op_ge(vm); break;
+            case OP_AND: op_res = vm_op_and(vm); break;
+            case OP_OR:  op_res = vm_op_or(vm); break;
+            case OP_NOP: break;
+            case OP_DUP: op_res = vm_op_dup(vm); break;
+            case OP_POP: (void)vm_pop(vm); break;
+            case OP_LOAD_CONST_U16:
+                op_res = vm_op_load_const_u16(vm, bytecode, frame, ip);
+                break;
+            case OP_LOAD_LOCAL_U8:
+                op_res = vm_op_load_local_u8(vm, frame, ip);
+                break;
+            case OP_STORE_LOCAL_U8:
+                op_res = vm_op_store_local_u8(vm, frame, ip);
+                break;
+            case OP_LOAD_GLOBAL_U16:
+                op_res = vm_op_load_global_u16(vm, frame, ip);
+                break;
+            case OP_STORE_GLOBAL_U16:
+                op_res = vm_op_store_global_u16(vm, frame, ip);
+                break;
+            case OP_JUMP_U16:
+                op_res = vm_op_jump_u16(vm, frame, ip);
+                break;
+            case OP_JUMP_IF_FALSE_U16:
+                op_res = vm_op_jump_if_false_u16(vm, frame, ip);
+                break;
+            case OP_JUMP_IF_TRUE_U16:
+                op_res = vm_op_jump_if_true_u16(vm, frame, ip);
+                break;
+            case OP_CALL_U8:
+                op_res = vm_op_call_u8(vm, frame, ip);
+                break;
+            case OP_CALL_U16:
+                op_res = vm_op_call_u16(vm, frame, ip);
+                break;
+            case OP_RETURN: {
+                Value result = vm_pop(vm);
+                CallFrame* old_frame = &vm->frames[vm->frame_count - 1];
+                vm_close_upvalues(vm, &vm->stack[frame->slots_offset]);
+                vm->sp = old_frame->slots_offset;
+                vm_pop_frame(vm);
+                if (vm->frame_count >= target_frame_count) {
+                    vm_push(vm, result);
+                }
+                break;
+            }
+            case OP_RETURN_NIL: {
+                CallFrame* old_frame = &vm->frames[vm->frame_count - 1];
+                vm_close_upvalues(vm, &vm->stack[frame->slots_offset]);
+                vm->sp = old_frame->slots_offset;
+                vm_pop_frame(vm);
+                if (vm->frame_count >= target_frame_count) {
+                    vm_push(vm, NIL_VAL);
+                }
+                break;
+            }
+            case OP_ARRAY_NEW_U8:
+                op_res = vm_op_array_new_u8(vm, frame, ip);
+                break;
+            case OP_ARRAY_GET:
+                op_res = vm_op_array_get(vm);
+                break;
+            case OP_ARRAY_SET:
+                op_res = vm_op_array_set(vm);
+                break;
+            case OP_ARRAY_LEN:
+                op_res = vm_op_array_len(vm);
+                break;
+            case OP_PRINT:
+                op_res = vm_op_print(vm);
+                break;
+            case OP_NEW_CLOSURE:
+                op_res = vm_op_new_closure(vm, bytecode, frame, ip);
+                break;
+            case OP_LOAD_UPVALUE_U8:
+                op_res = vm_op_load_upvalue_u8(vm, frame, ip);
+                break;
+            case OP_STORE_UPVALUE_U8:
+                op_res = vm_op_store_upvalue_u8(vm, frame, ip);
+                break;
+            case OP_HALT:
+                return 0;
+            case OP_BREAK:
+                break;
+            default:
+                vm_runtime_error(vm, "Unknown opcode %d in frame completion", opcode);
+                return 1;
+        }
+        if (op_res != 0) return op_res;
+    }
+    return 0;
+}
+
 int vm_op_call_u8(VM* vm, CallFrame* frame, uint8_t* ip) {
     int argc;
     argc = *ip++;
@@ -1261,18 +1356,6 @@ int vm_op_call_u8(VM* vm, CallFrame* frame, uint8_t* ip) {
     int callee_index = vm->sp - 1 - argc;
     Value callee = vm->stack[callee_index];
 
-    if (IS_CLOSURE(callee)) {
-        ClosureObject* cl = AS_CLOSURE(callee);
-        uint32_t func_idx = (uint32_t)cl->function->func_index;
-
-        bool handled = jit_vm_handle_call(vm, func_idx, frame->bytecode);
-        if (handled) {
-            frame = &vm->frames[vm->frame_count - 1];
-            ip = frame->ip;
-            return 0;
-        }
-    }
-
     if (vm->debug) {
         fprintf(stderr,
         "[CALL] callee_index=%d type=[%s]\n",
@@ -1330,6 +1413,8 @@ int vm_op_call_u8(VM* vm, CallFrame* frame, uint8_t* ip) {
 
         vm->sp = slots_offset + argc;
 
+        int frame_count_before = vm->frame_count;
+        
         vm_push_frame_with_ip_at(
             vm,
             fn->bytecode,
@@ -1341,15 +1426,22 @@ int vm_op_call_u8(VM* vm, CallFrame* frame, uint8_t* ip) {
         CallFrame* new_frame = &vm->frames[vm->frame_count - 1];
         new_frame->closure = cl;
 
-        frame = new_frame;
-        ip = frame->ip;
-
         if (vm->debug) {
             fprintf(stderr,
             "[CALL] new frame: func=%s slots_offset=%d slot_count=%d sp=%d\n",
             fn->name ? fn->name : "<fn>",
-            frame->slots_offset, frame->slot_count, vm->sp);
+            new_frame->slots_offset, new_frame->slot_count, vm->sp);
         }
+
+        uint32_t func_idx = (uint32_t)fn->func_index;
+        bool handled = jit_vm_handle_call(vm, func_idx, fn->bytecode);
+        
+        if (handled) {
+            return 0;
+        }
+
+        int res = vm_run_frame_to_completion(vm, frame_count_before, fn->bytecode);
+        if (res != 0) return res;
     } else {
         vm_runtime_error(vm, "Attempt to call non-callable value");
         return 1;
@@ -1365,10 +1457,11 @@ int vm_op_call_u16(VM* vm, CallFrame* frame, uint8_t* ip) {
     int argc;
     argc = (int)read_u16(ip);
     ip += 2;
+    frame->ip = ip;
 
     if (vm->debug) {
         fprintf(stderr,
-        "[CALL] opcode=%s argc=%d sp=%d\n","CALL_U8",
+        "[CALL] opcode=%s argc=%d sp=%d\n","CALL_U16",
         argc, vm->sp);
     }
 
@@ -1379,18 +1472,6 @@ int vm_op_call_u16(VM* vm, CallFrame* frame, uint8_t* ip) {
 
     int callee_index = vm->sp - 1 - argc;
     Value callee = vm->stack[callee_index];
-
-    if (IS_CLOSURE(callee)) {
-        ClosureObject* cl = AS_CLOSURE(callee);
-        uint32_t func_idx = (uint32_t)cl->function->func_index;
-
-        bool handled = jit_vm_handle_call(vm, func_idx, frame->bytecode);
-        if (handled) {
-            frame = &vm->frames[vm->frame_count - 1];
-            ip = frame->ip;
-            return 0;
-        }
-    }
 
     if (vm->debug) {
         fprintf(stderr,
@@ -1449,6 +1530,8 @@ int vm_op_call_u16(VM* vm, CallFrame* frame, uint8_t* ip) {
 
         vm->sp = slots_offset + argc;
 
+        int frame_count_before = vm->frame_count;
+        
         vm_push_frame_with_ip_at(
             vm,
             fn->bytecode,
@@ -1460,15 +1543,22 @@ int vm_op_call_u16(VM* vm, CallFrame* frame, uint8_t* ip) {
         CallFrame* new_frame = &vm->frames[vm->frame_count - 1];
         new_frame->closure = cl;
 
-        frame = new_frame;
-        ip = frame->ip;
-
         if (vm->debug) {
             fprintf(stderr,
             "[CALL] new frame: func=%s slots_offset=%d slot_count=%d sp=%d\n",
             fn->name ? fn->name : "<fn>",
-            frame->slots_offset, frame->slot_count, vm->sp);
+            new_frame->slots_offset, new_frame->slot_count, vm->sp);
         }
+
+        uint32_t func_idx = (uint32_t)fn->func_index;
+        bool handled = jit_vm_handle_call(vm, func_idx, fn->bytecode);
+        
+        if (handled) {
+            return 0;
+        }
+
+        int res = vm_run_frame_to_completion(vm, frame_count_before, fn->bytecode);
+        if (res != 0) return res;
     } else {
         vm_runtime_error(vm, "Attempt to call non-callable value");
         return 1;
@@ -1558,54 +1648,34 @@ int vm_op_array_new_u8(VM* vm, CallFrame* frame, uint8_t* ip) {
 }
 
 int vm_op_array_get(VM* vm) {
-    printf("[vm_op_array_get ENTRY] vm=%p, sp=%d, stack=%p\n",
-            (void*)vm, vm->sp, (void*)vm->stack);
-
     if (vm->sp < 2) {
-        printf("[vm_op_array_get] ERROR: stack underflow, sp=%d\n", vm->sp);
         vm_runtime_error(vm, "ARRAY_GET stack underflow");
         return 1;
     }
 
     Value index = vm_pop(vm);
-    printf("[vm_op_array_get] index popped: type=%d",
-            index.type);
-
     Value array = vm_pop(vm);
-    printf("[vm_op_array_get] array popped: type=%d",
-            array.type);
 
     if (!IS_ARRAY(array)) {
-        printf("[vm_op_array_get] ERROR: not an array, type=%d\n", array.type);
         vm_runtime_error(vm, "ARRAY_GET type error (not array)");
         return 1;
     }
 
     if (!IS_INT(index)) {
-        printf("[vm_op_array_get] ERROR: index not int, type=%d\n", index.type);
         vm_runtime_error(vm, "ARRAY_GET type error (index not int)");
         return 1;
     }
 
     ArrayObject* arr = AS_ARRAY(array);
-    printf("[vm_op_array_get] arr=%p, count=%d, capacity=%d\n",
-            (void*)arr, arr->count, arr->capacity);
-
     int idx = (int)AS_INT(index);
-    printf("[vm_op_array_get] accessing index=%d (count=%d)\n", idx, arr->count);
 
     if (idx < 0 || idx >= arr->count) {
-        printf("[vm_op_array_get] ERROR: out of bounds idx=%d, count=%d\n",
-                idx, arr->count);
         vm_runtime_error(vm, "ARRAY_GET out of bounds");
         return 1;
     }
 
     Value result = arr->items[idx];
-    printf("[vm_op_array_get] result: type=%d\n", result.type);
-
     vm_push(vm, result);
-    printf("[vm_op_array_get] SUCCESS, sp now=%d\n", vm->sp);
     return 0;
 }
 
@@ -1662,6 +1732,11 @@ int vm_op_print(VM* vm) {
     vm_print_value(v);
     printf("\n");
     return 0;
+}
+
+int64_t jit_pop_and_test_bool(VM* vm) {
+    Value v = vm_pop(vm);
+    return value_to_bool(&v);
 }
 
 int jit_handle_return(VM* vm, CallFrame* frame, uint8_t* ip) {

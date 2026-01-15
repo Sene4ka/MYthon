@@ -121,7 +121,7 @@ if(CMAKE_C_COMPILER MATCHES "clang" OR CMAKE_CXX_COMPILER MATCHES "clang" AND EN
 
     target_compile_options(mython PRIVATE
             -fsanitize=address
-            -g3 -O0 -fno-omit-frame-pointer
+            -g3 -O2 -fno-omit-frame-pointer
     )
 
     target_link_libraries(mython
@@ -133,7 +133,7 @@ if(CMAKE_C_COMPILER MATCHES "clang" OR CMAKE_CXX_COMPILER MATCHES "clang" AND EN
     )
 else()
     target_compile_options(mython PRIVATE
-            -g3 -O0 -fno-omit-frame-pointer
+            -g3 -O2 -fno-omit-frame-pointer
     )
     message(WARNING "ASan not enabled")
 endif()

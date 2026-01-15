@@ -31,7 +31,7 @@ CLIArgs parse_args(int argc, char** argv) {
 
     args.jit_enabled = 0;
     args.jit_opt_level = 2;
-    args.jit_opt_threshold = 5;
+    args.jit_opt_threshold = 10;
     args.jit_native_threshold = 10;
     args.jit_stats = 0;
 
@@ -284,6 +284,8 @@ int run_file(CLIArgs args) {
         fprintf(stderr, "Runtime error\n");
     }
 
+    if (args.jit_stats) jit_print_stats(vm->jit);
+
     vm_free(vm);
     bytecode_free(bc);
     free(source);
@@ -378,6 +380,8 @@ int exec_bytecode_file(CLIArgs args) {
     if (result == INTERPRET_RUNTIME_ERROR) {
         fprintf(stderr, "Runtime error\n");
     }
+
+    if (args.jit_stats) jit_print_stats(vm->jit);
 
     vm_free(vm);
     bytecode_free(bc);

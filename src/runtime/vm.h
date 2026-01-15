@@ -235,6 +235,7 @@ int vm_op_print(VM* vm);
 
 int jit_handle_return(VM* vm, CallFrame* frame, uint8_t* ip);
 int jit_handle_return_nil(VM* vm, CallFrame* frame, uint8_t* ip);
+int64_t jit_pop_and_test_bool(VM* vm);
 
 // Helpers
 void vm_push_frame(VM* vm, Bytecode* bytecode, int slot_count);

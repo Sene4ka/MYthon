@@ -228,9 +228,11 @@ int jit_bc_constant_folding(Bytecode* bc, uint32_t func_idx, int debug) {
     int folded = 0;
     Function* func = &bc->functions[func_idx];
 
-    printf("[JIT Tier-1 OPT-CF] Folding func %u '%s' [%u..%u) size=%u\n",
+    if (debug) {
+        printf("[JIT Tier-1 OPT-CF] Folding func %u '%s' [%u..%u) size=%u\n",
            func_idx, func->name ? func->name : "<anon>",
            func->code_start, func->code_end, func->code_end - func->code_start);
+    }
 
     uint32_t i = func->code_start;
     int patterns_found = 0;
@@ -492,7 +494,7 @@ void* jit_compile_or_promote(JIT* jit, Bytecode* bc, uint32_t func_idx) {
                    (unsigned long long)jit->hotness_counters[func_idx]);
         }
 
-        JitCodegen* cg = jit_codegen_new();
+        JitCodegen* cg = jit_codegen_new(jit->debug);
         if (!cg) {
             cf->native_failed = 1;
             if (jit->debug) {
