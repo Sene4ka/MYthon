@@ -66,7 +66,7 @@ do { \
 #define FRAME_CLOSURE_OFFSET    offsetof(CallFrame, closure)
 
 #define VALUE_TYPE_OFFSET       offsetof(Value, type)
-#define VALUE_DATA_OFFSET       offsetof(Value, data)
+#define VALUE_DATA_OFFSET       offsetof(Value, as)
 #define VALUE_SIZE              sizeof(Value)
 
 #define CLOSURE_FUNCTION_OFFSET offsetof(ClosureObject, function)
@@ -122,67 +122,14 @@ do { \
 #define VAL_CLOSURE 8
 #define VAL_UPVALUE 9
 
-|.macro peek_stack, offset, type_reg, data_reg
-  | mov eax, dword [r15 + VM_SP_OFFSET]
-  | sub eax, offset
-  | dec eax
-  | mov rdx, [r15 + VM_STACK_OFFSET]
-  | lea rsi, [rdx + rax*16]
-  | mov type_reg, dword [rsi]
-  | mov data_reg, [rsi + 8]
-|.endmacro
-
-|.macro peek_stack_checked, offset, type_reg, data_reg, error_label
-  | mov eax, offset
-  | cmp eax, dword [r15 + VM_SP_OFFSET]
-  | jae error_label
-  | mov ecx, dword [r15 + VM_SP_OFFSET]
-  | sub ecx, eax
-  | dec ecx
-  | mov rdx, [r15 + VM_STACK_OFFSET]
-  | lea rsi, [rdx + rcx*16]
-  | mov type_reg, dword [rsi]
-  | mov data_reg, [rsi + 8]
-|.endmacro
-
 |.macro pop_stack, type_reg, data_reg
-  | mov eax, dword [r15 + VM_SP_OFFSET]  // eax = 57
-  | dec eax                              // eax = 56
-  | mov dword [r15 + VM_SP_OFFSET], eax  // VM->sp = 56 (32-bit store!)
-  | mov rdx, [r15 + VM_STACK_OFFSET]
-  | lea rsi, [rdx + rax*16]              // rsi = stack[56]
+  | mov eax, dword [rbx + VM_SP_OFFSET]
+  | dec eax
+  | mov dword [rbx + VM_SP_OFFSET], eax
+  | mov rdx, [rbx + VM_STACK_OFFSET]
+  | lea rsi, [rdx + rax*16]
   | mov type_reg, dword [rsi]
-  | mov data_reg, [rsi + 8]
-|.endmacro
-
-|.macro push_stack_fast, type_reg, data_reg
-  | mov eax, dword [r15 + VM_SP_OFFSET]
-  | mov rdx, [r15 + VM_STACK_OFFSET]
-  | lea rsi, [rdx + rax*16]
-  | mov dword [rsi], type_reg
-  | mov [rsi + 8], data_reg
-  | inc eax
-  | mov [r15 + VM_SP_OFFSET], eax
-  | cmp eax, dword [r15 + VM_STACK_SIZE_OFFSET]
-  | jle >1
-  | mov dword [r15 + VM_STACK_SIZE_OFFSET], eax
-  |1:
-|.endmacro
-
-|.macro push_stack_checked, type_reg, data_reg, slow_label
-  | mov eax, dword [r15 + VM_SP_OFFSET]
-  | cmp eax, dword [r15 + VM_CAPACITY_OFFSET]
-  | jae slow_label
-  | mov rdx, [r15 + VM_STACK_OFFSET]
-  | lea rsi, [rdx + rax*16]
-  | mov dword [rsi], type_reg
-  | mov [rsi + 8], data_reg
-  | inc eax
-  | mov [r15 + VM_SP_OFFSET], eax
-  | cmp eax, dword [r15 + VM_STACK_SIZE_OFFSET]
-  | jle >1
-  | mov dword [r15 + VM_STACK_SIZE_OFFSET], eax
-  |1:
+  | mov data_reg, [rsi + VALUE_DATA_OFFSET]
 |.endmacro
 
 |.macro value_to_bool, type_reg, data_reg, out_reg
@@ -231,86 +178,6 @@ do { \
   | movzx out_reg, al
 
 |->done:
-|.endmacro
-
-|.macro do_return, result_type_reg, result_data_reg, nil_label
-  // Сохраняем r15 (VM*) ОДИН раз в начале
-  | mov r12, r15
-
-  // old_frame = &vm->frames[vm->frame_count - 1]
-  | mov ecx, dword [r15 + VM_FRAMECOUNT_OFFSET]
-  | dec ecx
-  | mov rdx, [r15 + VM_FRAMES_OFFSET]
-  | mov eax, ecx
-  | shl rax, 5
-  | add rax, rdx
-  | mov r14, rax              // r14 = old_frame
-
-  // vm_close_upvalues(vm, &vm->stack[old_frame->slots_offset])
-  | mov eax, dword [r14 + FRAME_SLOTS_OFFSET]
-  | mov rdx, [r15 + VM_STACK_OFFSET]
-  | lea rsi, [rdx + rax * 16]
-
-  #ifdef _WIN32
-  | sub rsp, 32
-  | mov rcx, r15              // r15 всё ещё валиден
-  | mov rdx, rsi
-  | mov64 rax, (uintptr_t)vm_close_upvalues
-  | call rax
-  | add rsp, 32
-  #else
-  | mov rdi, r15
-  | mov64 rax, (uintptr_t)vm_close_upvalues
-  | call rax
-  #endif
-
-  // Восстанавливаем r15 после первого вызова
-  | mov r15, r12
-
-  // vm->sp = old_frame->slots_offset
-  | mov eax, dword [r14 + FRAME_SLOTS_OFFSET]
-  | mov dword [r15 + VM_SP_OFFSET], eax
-
-  // vm_pop_frame(vm)
-  #ifdef _WIN32
-  | sub rsp, 32
-  | mov rcx, r15
-  | mov64 rax, (uintptr_t)vm_pop_frame
-  | call rax
-  | add rsp, 32
-  #else
-  | mov rdi, r15
-  | mov64 rax, (uintptr_t)vm_pop_frame
-  | call rax
-  #endif
-
-  // Восстанавливаем r15 после второго вызова
-  | mov r15, r12
-
-  // if (vm->frame_count == 0) -> return to caller
-  | mov eax, dword [r15 + VM_FRAMECOUNT_OFFSET]
-  | test eax, eax
-  | jz nil_label
-
-  // Push result and continue
-  | mov eax, dword [r15 + VM_SP_OFFSET]
-  | mov rdx, [r15 + VM_STACK_OFFSET]
-  | lea rsi, [rdx + rax * 16]
-  | mov dword [rsi], result_type_reg
-  | mov [rsi + 8], result_data_reg
-  | inc eax
-  | mov dword [r15 + VM_SP_OFFSET], eax
-
-  // Update frame/ip (continue execution)
-  // НЕ восстанавливаем r15 здесь, потому что он будет перезаписан!
-  | mov ecx, dword [r15 + VM_FRAMECOUNT_OFFSET]
-  | dec ecx
-  | mov eax, ecx
-  | mov rdx, [r15 + VM_FRAMES_OFFSET]
-  | shl rax, 5
-  | add rdx, rax
-  | mov r8, [rdx + FRAME_IP_OFFSET]
-  | mov r14, rdx
 |.endmacro
 
 // JitCodegen Structure
@@ -515,17 +382,16 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
     // Prologue
     | push rbp
     | mov rbp, rsp
-    | push rbx
+    | push rbx                  // Сохраняем rbx (callee-saved)
     | push r12
     | push r13
     | push r14
     | push r15
-    | and rsp, -16
-    | sub rsp, 64
+    | sub rsp, 72
     #ifdef _WIN32
-    | mov r15, rcx
+    | mov rbx, rcx              // rbx = VM* (callee-saved, не нужно backup)
     #else
-    | mov r15, rdi
+    | mov rbx, rdi              // rbx = VM* (callee-saved, не нужно backup)
     #endif
 
     // Dispatch loop
@@ -554,19 +420,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_ADD: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_add
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_add
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -575,19 +437,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_SUB: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_sub
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_sub
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -596,19 +454,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_MUL: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_mul
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_mul
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -617,19 +471,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_DIV: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_div
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_div
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -638,19 +488,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_MOD: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_mod
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_mod
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -659,19 +505,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_NEG: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_neg
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_neg
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -681,19 +523,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         // ========== LOGIC ==========
         case OP_NOT: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_not
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_not
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -702,19 +540,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_AND: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_and
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_and
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -723,19 +557,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_OR: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_or
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_or
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -744,19 +574,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_EQ: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_eq
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_eq
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -765,19 +591,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_NEQ: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_neq
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_neq
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -786,19 +608,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_LT: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_lt
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_lt
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -807,19 +625,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_LE: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_le
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_le
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -828,19 +642,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_GT: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_gt
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_gt
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -849,19 +659,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_GE: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_ge
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_ge
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -870,72 +676,52 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         // Stack operations
         case OP_DUP: {
-            // Peek top (без проверки, bytecode compiler гарантирует валидность)
-            | peek_stack 0, r10d, r11
-
-            // Push с проверкой capacity
-            | push_stack_checked r10d, r11, ->dup_slow
-            // Если capacity OK, execution попадёт сюда
-            | jmp ->dup_done
-
-            // Slow path: нужен realloc
-            |->dup_slow:
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_dup
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_dup
             | call rax
-            | mov r15, r12
             #endif
-
-            |->dup_done:
             break;
         }
 
         case OP_POP: {
-            | mov eax, dword [r15 + VM_SP_OFFSET]
+            | mov eax, dword [rbx + VM_SP_OFFSET]
             | dec eax
-            | mov dword [r15 + VM_SP_OFFSET], eax  // ✅ Добавь dword для ясности
+            | mov dword [rbx + VM_SP_OFFSET], eax
             break;
         }
 
         // Constants
         case OP_LOAD_CONST_U16: {
-            | mov r9d, dword [r15 + VM_FRAMECOUNT_OFFSET]
+            | mov r9d, dword [rbx + VM_FRAMECOUNT_OFFSET]
             | dec r9d
-            | mov r10, [r15 + VM_FRAMES_OFFSET]
+            | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
             | lea r9, [r10 + rax]
 
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15                          // vm
+            | mov rcx, rbx                          // vm
             | mov64 rdx, (uintptr_t)bc              // bytecode
             | mov r8, r9                            // frame
             | mov64 r9, (uintptr_t)&bc->code[ip+1]  // ip (4th arg goes to r9)
             | mov64 rax, (uintptr_t)vm_op_load_const_u16
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rsi, (uintptr_t)bc
             | mov rdx, r9
             | mov64 rcx, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_load_const_u16
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -943,31 +729,27 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         }
         // Locals
         case OP_LOAD_LOCAL_U8: {
-            | mov r9d, dword [r15 + VM_FRAMECOUNT_OFFSET]
+            | mov r9d, dword [rbx + VM_FRAMECOUNT_OFFSET]
             | dec r9d
-            | mov r10, [r15 + VM_FRAMES_OFFSET]
+            | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
             | lea r9, [r10 + rax]
 
             #ifdef _WIN32
-            | mov r12, r15                          // Сохранить r15 ПЕРВЫМ
             | sub rsp, 32                           // Shadow space
-            | mov rcx, r15                          // vm
+            | mov rcx, rbx                          // vm
             | mov rdx, r9                           // frame
             | mov64 r8, (uintptr_t)&bc->code[ip+1] // ip
             | mov64 rax, (uintptr_t)vm_op_load_local_u8
             | call rax
             | add rsp, 32
-            | mov r15, r12                               // Восстановить r15
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov rsi, r9
             | mov64 rdx, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_load_local_u8
             | call rax
-            | mov r15, r12
             #endif
 
             | test eax, eax
@@ -976,31 +758,27 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         }
 
         case OP_STORE_LOCAL_U8: {
-            | mov r9d, dword [r15 + VM_FRAMECOUNT_OFFSET]
+            | mov r9d, dword [rbx + VM_FRAMECOUNT_OFFSET]
             | dec r9d
-            | mov r10, [r15 + VM_FRAMES_OFFSET]
+            | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
             | lea r9, [r10 + rax]
 
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov rdx, r9
             | mov64 r8, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_store_local_u8
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov rsi, r9
             | mov64 rdx, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_store_local_u8
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -1008,31 +786,27 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         }
 
         case OP_LOAD_GLOBAL_U16: {
-            | mov r9d, dword [r15 + VM_FRAMECOUNT_OFFSET]
+            | mov r9d, dword [rbx + VM_FRAMECOUNT_OFFSET]
             | dec r9d
-            | mov r10, [r15 + VM_FRAMES_OFFSET]
+            | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
             | lea r9, [r10 + rax]                   // r9 = frame
 
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15                          // vm
+            | mov rcx, rbx                          // vm
             | mov rdx, r9                           // frame
             | mov64 r8, (uintptr_t)&bc->code[ip+1]  // ip
             | mov64 rax, (uintptr_t)vm_op_load_global_u16
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov rsi, r9
             | mov64 rdx, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_load_global_u16
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -1040,31 +814,27 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         }
 
         case OP_STORE_GLOBAL_U16: {
-            | mov r9d, dword [r15 + VM_FRAMECOUNT_OFFSET]
+            | mov r9d, dword [rbx + VM_FRAMECOUNT_OFFSET]
             | dec r9d
-            | mov r10, [r15 + VM_FRAMES_OFFSET]
+            | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
             | lea r9, [r10 + rax]
 
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov rdx, r9                           // frame
             | mov64 r8, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_store_global_u16
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov rsi, r9
             | mov64 rdx, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_store_global_u16
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -1081,7 +851,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             printf("[Codegen JUMP] ip=%u, off=%d, target=%u\n", ip, off, target);
 
             if (target >= fn->code_end) {
-                | jmp ->epilogue
+                | jmp ->cleanup
             } else if (target < fn->code_start) {
                 fprintf(stderr, "[Codegen] ERROR: JUMP target before start\n");
                 return NULL;
@@ -1113,7 +883,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | test r11, r11
 
             if (target >= fn->code_end) {
-                | jz ->epilogue
+                | jz ->cleanup
             } else if (target < fn->code_start) {
                 fprintf(stderr, "[Codegen] ERROR: JUMP_IF_FALSE target before start\n");
                 return NULL;
@@ -1150,7 +920,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
             if (target >= fn->code_end) {
                 //if (debug) printf("  Jump to epilogue\n");
-                | jnz ->epilogue
+                | jnz ->cleanup
             } else if (target < fn->code_start) {
                 //fprintf(stderr, "[Codegen] ERROR: JUMP_IF_TRUE target before start\n");
                 return NULL;
@@ -1164,31 +934,27 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         }
 
         case OP_CALL_U8: {
-            | mov r9d, dword [r15 + VM_FRAMECOUNT_OFFSET]
+            | mov r9d, dword [rbx + VM_FRAMECOUNT_OFFSET]
             | dec r9d
-            | mov r10, [r15 + VM_FRAMES_OFFSET]
+            | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
             | lea r9, [r10 + rax]                   // r9 = frame
 
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15                          // vm
+            | mov rcx, rbx                          // vm
             | mov rdx, r9                           // frame
             | mov64 r8, (uintptr_t)&bc->code[ip+1]  // ip
             | mov64 rax, (uintptr_t)vm_op_call_u8
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov rsi, r9
             | mov64 rdx, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_call_u8
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -1196,31 +962,27 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         }
 
         case OP_CALL_U16: {
-            | mov r9d, dword [r15 + VM_FRAMECOUNT_OFFSET]
+            | mov r9d, dword [rbx + VM_FRAMECOUNT_OFFSET]
             | dec r9d
-            | mov r10, [r15 + VM_FRAMES_OFFSET]
+            | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
             | lea r9, [r10 + rax]
 
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov rdx, r9                           // frame
             | mov64 r8, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_call_u16
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov rsi, r9
             | mov64 rdx, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_call_u16
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -1229,51 +991,82 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         // Return
         case OP_RETURN: {
-            // Pop result into r10:r11
-            | pop_stack r10d, r11
-
-            // Do return with result
-            | do_return r10d, r11, ->return_to_caller
-            break;
-        }
-
-        case OP_RETURN_NIL: {
-            // Set NIL in r10:r11
-            | xor r10d, r10d
-            | xor r11, r11
-
-            // Do return with NIL
-            | do_return r10d, r11, ->return_nil_to_caller
-            break;
-        }
-
-        // Upvalues
-        case OP_LOAD_UPVALUE_U8: {
-            | mov r9d, dword [r15 + VM_FRAMECOUNT_OFFSET]
+            | mov r9d, dword [rbx + VM_FRAMECOUNT_OFFSET]
             | dec r9d
-            | mov r10, [r15 + VM_FRAMES_OFFSET]
+            | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
             | lea r9, [r10 + rax]                   // r9 = frame
 
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15                          // vm
+            | mov rcx, rbx                          // vm
+            | mov rdx, r9                           // frame
+            | mov64 r8, (uintptr_t)&bc->code[ip+1]  // ip
+            | mov64 rax, (uintptr_t)jit_handle_return
+            | call rax
+            | add rsp, 32
+            #else
+            | mov rdi, rbx
+            | mov rsi, r9
+            | mov64 rdx, (uintptr_t)&bc->code[ip+1]
+            | mov64 rax, (uintptr_t)jit_handle_return
+            | call rax
+            #endif
+            | test eax, eax
+            | jmp ->cleanup
+        }
+
+        case OP_RETURN_NIL: {
+            | mov r9d, dword [rbx + VM_FRAMECOUNT_OFFSET]
+            | dec r9d
+            | mov r10, [rbx + VM_FRAMES_OFFSET]
+            | mov eax, r9d
+            | shl rax, 5
+            | lea r9, [r10 + rax]                   // r9 = frame
+
+            #ifdef _WIN32
+            | sub rsp, 32
+            | mov rcx, rbx                          // vm
+            | mov rdx, r9                           // frame
+            | mov64 r8, (uintptr_t)&bc->code[ip+1]  // ip
+            | mov64 rax, (uintptr_t)jit_handle_return_nil
+            | call rax
+            | add rsp, 32
+            #else
+            | mov rdi, rbx
+            | mov rsi, r9
+            | mov64 rdx, (uintptr_t)&bc->code[ip+1]
+            | mov64 rax, (uintptr_t)jit_handle_return
+            | call rax
+            #endif
+            | test eax, eax
+            | jmp ->cleanup
+        }
+
+        // Upvalues
+        case OP_LOAD_UPVALUE_U8: {
+            | mov r9d, dword [rbx + VM_FRAMECOUNT_OFFSET]
+            | dec r9d
+            | mov r10, [rbx + VM_FRAMES_OFFSET]
+            | mov eax, r9d
+            | shl rax, 5
+            | lea r9, [r10 + rax]                   // r9 = frame
+
+            #ifdef _WIN32
+            | sub rsp, 32
+            | mov rcx, rbx                          // vm
             | mov rdx, r9                           // frame
             | mov64 r8, (uintptr_t)&bc->code[ip+1]  // ip
             | mov64 rax, (uintptr_t)vm_op_load_upvalue_u8
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov rsi, r9
             | mov64 rdx, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_load_upvalue_u8
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -1281,31 +1074,27 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         }
 
         case OP_STORE_UPVALUE_U8: {
-            | mov r9d, dword [r15 + VM_FRAMECOUNT_OFFSET]
+            | mov r9d, dword [rbx + VM_FRAMECOUNT_OFFSET]
             | dec r9d
-            | mov r10, [r15 + VM_FRAMES_OFFSET]
+            | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
             | lea r9, [r10 + rax]
 
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov rdx, r9                           // frame
             | mov64 r8, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_store_upvalue_u8
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov rsi, r9
             | mov64 rdx, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_store_upvalue_u8
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -1313,31 +1102,27 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         }
 
         case OP_ARRAY_NEW_U8: {
-            | mov r9d, dword [r15 + VM_FRAMECOUNT_OFFSET]
+            | mov r9d, dword [rbx + VM_FRAMECOUNT_OFFSET]
             | dec r9d
-            | mov r10, [r15 + VM_FRAMES_OFFSET]
+            | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
             | lea r9, [r10 + rax]                   // r9 = frame
 
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15                          // vm
+            | mov rcx, rbx                          // vm
             | mov rdx, r9                           // frame
             | mov64 r8, (uintptr_t)&bc->code[ip+1]  // ip
             | mov64 rax, (uintptr_t)vm_op_array_new_u8
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov rsi, r9
             | mov64 rdx, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_array_new_u8
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -1346,19 +1131,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_ARRAY_GET: {
             #ifdef _WIN32
-            | mov r12, r15                          // r12 вместо rbx!
             | sub rsp, 32
-            | mov rcx, r15                          // ТОЛЬКО vm
+            | mov rcx, rbx                          // ТОЛЬКО vm
             | mov64 rax, (uintptr_t)vm_op_array_get
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15                          // ТОЛЬКО vm
+            | mov rdi, rbx                          // ТОЛЬКО vm
             | mov64 rax, (uintptr_t)vm_op_array_get
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -1367,19 +1148,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_ARRAY_SET: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_array_set
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_array_set
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -1388,19 +1165,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
         case OP_ARRAY_LEN: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_array_len
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_array_len
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -1410,51 +1183,43 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         // Misc
         case OP_PRINT: {
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15          // ✅ Было r12 - БАГ!
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_print
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_print
             | call rax
-            | mov r15, r12
             #endif
             break;
         }
 
         case OP_NEW_CLOSURE: {
-            | mov r9d, dword [r15 + VM_FRAMECOUNT_OFFSET]
+            | mov r9d, dword [rbx + VM_FRAMECOUNT_OFFSET]
             | dec r9d
-            | mov r10, [r15 + VM_FRAMES_OFFSET]
+            | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
             | lea r9, [r10 + rax]                   // r9 = frame
 
             #ifdef _WIN32
-            | mov r12, r15
             | sub rsp, 32
-            | mov rcx, r15                          // vm
+            | mov rcx, rbx                          // vm
             | mov64 rdx, (uintptr_t)bc              // bytecode
             | mov r8, r9                            // frame
             | mov64 r9, (uintptr_t)&bc->code[ip+1]  // ip (4th arg in r9)
             | mov64 rax, (uintptr_t)vm_op_new_closure
             | call rax
             | add rsp, 32
-            | mov r15, r12
             #else
-            | mov r12, r15
-            | mov rdi, r15                          // vm
+            | mov rdi, rbx                          // vm
             | mov64 rsi, (uintptr_t)bc              // bytecode
             | mov rdx, r9                           // frame
             | mov64 rcx, (uintptr_t)&bc->code[ip+1] // ip
             | mov64 rax, (uintptr_t)vm_op_new_closure
             | call rax
-            | mov r15, r12
             #endif
             | test eax, eax
             | jnz ->error
@@ -1472,26 +1237,43 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         }
     }
 
+    // After all instructions: normal completion
+    | jmp ->normal_completion
+
+    // Normal completion: update frame->ip to end of function and return
+    |->normal_completion:
+    // Update frame->ip to point to end of function
+    | mov ecx, dword [rbx + VM_FRAMECOUNT_OFFSET]
+    | dec ecx
+    | mov rdx, [rbx + VM_FRAMES_OFFSET]
+    | mov eax, ecx
+    | shl rax, 5
+    | add rdx, rax                              // rdx = current frame
+    | mov64 rax, (uintptr_t)(bc->code + fn->code_end)
+    | mov [rdx + FRAME_IP_OFFSET], rax          // frame->ip = end of function
+    | xor eax, eax                              // return 0 (success)
+    | jmp ->cleanup
+
     // Global labels для RETURN
     |->return_to_caller:
-    | mov eax, dword [r15 + VM_SP_OFFSET]
-    | mov rdx, [r15 + VM_STACK_OFFSET]
+    | mov eax, dword [rbx + VM_SP_OFFSET]
+    | mov rdx, [rbx + VM_STACK_OFFSET]
     | lea rsi, [rdx + rax * 16]
     | mov dword [rsi], r10d
     | mov [rsi + 8], r11
     | inc eax
-    | mov dword [r15 + VM_SP_OFFSET], eax
+    | mov dword [rbx + VM_SP_OFFSET], eax
     | xor eax, eax
     | jmp ->cleanup
 
     |->return_nil_to_caller:
-    | mov eax, dword [r15 + VM_SP_OFFSET]
-    | mov rdx, [r15 + VM_STACK_OFFSET]
+    | mov eax, dword [rbx + VM_SP_OFFSET]
+    | mov rdx, [rbx + VM_STACK_OFFSET]
     | lea rsi, [rdx + rax * 16]
     | mov dword [rsi], VAL_NIL
     | mov qword [rsi + 8], 0
     | inc eax
-    | mov dword [r15 + VM_SP_OFFSET], eax
+    | mov dword [rbx + VM_SP_OFFSET], eax
     | xor eax, eax
     | jmp ->cleanup
 
@@ -1501,7 +1283,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
     // Epilogue
     |->cleanup:
-    | add rsp, 64
+    | add rsp, 72
     | pop r15
     | pop r14
     | pop r13

@@ -83,22 +83,22 @@ static void debug_print_instruction(Bytecode* bc, uint8_t* ip) {
     uint8_t opcode = *ip;
     OpCode op = (OpCode)opcode;
 
-    fprintf(stderr, "%04zu  %s", offset, opcode_name(opcode));
+    printf("%04zu  %s", offset, opcode_name(opcode));
 
     switch (op) {
         case OP_LOAD_CONST_U16: {
             uint16_t idx = (uint16_t)(ip[1] << 8 | ip[2]);
-            fprintf(stderr, " %u", idx);
+            printf(" %u", idx);
             if (idx < bc->const_count) {
                 Constant* c = &bc->constants[idx];
-                fprintf(stderr, " (");
+                printf(" (");
                 switch (c->type) {
-                    case CONST_INT:    fprintf(stderr, "INT %lld", (long long)c->int_val); break;
-                    case CONST_FLOAT:  fprintf(stderr, "FLOAT %g", c->float_val); break;
-                    case CONST_STRING: fprintf(stderr, "STRING \"%s\"", c->str_val); break;
-                    default:           fprintf(stderr, "?"); break;
+                    case CONST_INT:    printf("INT %lld", (long long)c->int_val); break;
+                    case CONST_FLOAT:  printf("FLOAT %g", c->float_val); break;
+                    case CONST_STRING: printf("STRING \"%s\"", c->str_val); break;
+                    default:           printf("?"); break;
                 }
-                fprintf(stderr, ")");
+                printf(")");
             }
             break;
         }
@@ -109,7 +109,7 @@ static void debug_print_instruction(Bytecode* bc, uint8_t* ip) {
         case OP_STORE_UPVALUE_U8:
         case OP_ARRAY_NEW_U8: {
             uint8_t b = ip[1];
-            fprintf(stderr, " %u", b);
+            printf(" %u", b);
             break;
         }
 
@@ -118,31 +118,31 @@ static void debug_print_instruction(Bytecode* bc, uint8_t* ip) {
         case OP_JUMP_IF_TRUE_U16: {
             int16_t off = (int16_t)(ip[1] << 8 | ip[2]);
             size_t target = offset + 3 + off;
-            fprintf(stderr, " %d -> %zu", (int)off, target);
+            printf(" %d -> %zu", (int)off, target);
             break;
         }
 
         case OP_CALL_U8: {
             uint8_t argc = ip[1];
-            fprintf(stderr, " argc=%u", argc);
+            printf(" argc=%u", argc);
             break;
         }
         case OP_CALL_U16: {
             uint16_t argc = (uint16_t)(ip[1] << 8 | ip[2]);
-            fprintf(stderr, " argc=%u", argc);
+            printf(" argc=%u", argc);
             break;
         }
 
         case OP_LOAD_GLOBAL_U16:
         case OP_STORE_GLOBAL_U16: {
             uint16_t idx = (uint16_t)(ip[1] << 8 | ip[2]);
-            fprintf(stderr, " %u", idx);
+            printf(" %u", idx);
             break;
         }
 
         case OP_NEW_CLOSURE: {
             uint16_t idx = (uint16_t)(ip[1] << 8 | ip[2]);
-            fprintf(stderr, " %u", idx);
+            printf(" %u", idx);
             break;
         }
 
@@ -150,21 +150,21 @@ static void debug_print_instruction(Bytecode* bc, uint8_t* ip) {
             break;
     }
 
-    fprintf(stderr, "\n");
+    printf("\n");
 }
 
 
 static void debug_print_stack(VM* vm) {
-    fprintf(stderr, "  Stack (size=%d):\n", vm->stack_size);
+    printf("  Stack (size=%d):\n", vm->stack_size);
     for (int i = vm->stack_size - 1; i >= 0; i--) {
-        fprintf(stderr, "    [%2d] = ", i);
+        printf("    [%2d] = ", i);
         debug_print_value(vm->stack[i]);
-        fprintf(stderr, "\n");
+        printf("\n");
     }
 }
 
 static void debug_print_frames(VM* vm) {
-    fprintf(stderr, "  Frames (count=%d):\n", vm->frame_count);
+    printf("  Frames (count=%d):\n", vm->frame_count);
     for (int i = vm->frame_count - 1; i >= 0; i--) {
         CallFrame* f = &vm->frames[i];
         int ip = (int)(f->ip - f->bytecode->code);
@@ -176,30 +176,30 @@ static void debug_print_frames(VM* vm) {
                 f->slots_offset,
                 f->slot_count);
         if (f->closure && f->closure->function && f->closure->function->name) {
-            fprintf(stderr, " name=%s", f->closure->function->name);
+            printf(" name=%s", f->closure->function->name);
         }
-        fprintf(stderr, "\n");
+        printf("\n");
     }
 }
 
 static void debug_print_locals(VM* vm) {
     if (vm->frame_count == 0) return;
     CallFrame* f = &vm->frames[vm->frame_count - 1];
-    fprintf(stderr, "  Locals (frame top, count=%d):\n", f->slot_count);
+    printf("  Locals (frame top, count=%d):\n", f->slot_count);
     for (int i = 0; i < f->slot_count; i++) {
         int idx = f->slots_offset + i;
-        fprintf(stderr, "    local[%2d] = ", i);
+        printf("    local[%2d] = ", i);
         debug_print_value(vm->stack[idx]);
-        fprintf(stderr, "\n");
+        printf("\n");
     }
 }
 
 static void debug_print_globals(VM* vm) {
-    fprintf(stderr, "  Globals (count=%d):\n", vm->global_count);
+    printf("  Globals (count=%d):\n", vm->global_count);
     for (int i = 0; i < vm->global_count; i++) {
-        fprintf(stderr, "    g[%2d] = ", i);
+        printf("    g[%2d] = ", i);
         debug_print_value(vm->globals[i]);
-        fprintf(stderr, "\n");
+        printf("\n");
     }
 }
 
@@ -209,18 +209,18 @@ static void debug_print_upvalues(VM* vm) {
     if (!f->closure) return;
 
     ClosureObject* clo = f->closure;
-    fprintf(stderr, "  Upvalues (count=%d):\n", clo->upvalue_count);
+    printf("  Upvalues (count=%d):\n", clo->upvalue_count);
     for (int i = 0; i < clo->upvalue_count; i++) {
         Upvalue* uv = clo->upvalues[i];
-        fprintf(stderr, "    uv[%2d] = ", i);
+        printf("    uv[%2d] = ", i);
         if (!uv) {
-            fprintf(stderr, "<null>\n");
+            printf("<null>\n");
         } else if (uv->location) {
             debug_print_value(*uv->location);
-            fprintf(stderr, " (open)\n");
+            printf(" (open)\n");
         } else {
             debug_print_value(uv->closed);
-            fprintf(stderr, " (closed)\n");
+            printf(" (closed)\n");
         }
     }
 }
@@ -234,12 +234,12 @@ static uint32_t hash_string(const char* str, int length) {
     return hash;
 }
 
-static int value_to_bool(Value value) {
-    switch (value.type) {
+int value_to_bool(Value* value) {
+    switch (value->type) {
         case VAL_NIL:   return 0;
-        case VAL_BOOL:  return value.as.boolean;
-        case VAL_INT:   return value.as.integer != 0;
-        case VAL_FLOAT: return value.as.floating != 0.0;
+        case VAL_BOOL:  return value->as.boolean;
+        case VAL_INT:   return value->as.integer != 0;
+        case VAL_FLOAT: return value->as.floating != 0.0;
         default:        return 1;
     }
 }
@@ -504,32 +504,11 @@ void vm_store_local(VM* vm, int index, Value value) {
 }
 
 Value vm_load_local(VM* vm, int index) {
-    /*if (vm->frame_count == 0) {
-        printf("[vm_load_local] ERROR: frame_count == 0\n");
-        return NIL_VAL;
-    }*/
-
     CallFrame* frame = &vm->frames[vm->frame_count - 1];
-
-    /*if (index < 0 || index >= frame->slot_count) {
-        printf("[vm_load_local] ERROR: index=%d out of bounds [0..%d)\n",
-               index, frame->slot_count);
-        return NIL_VAL;
-    }*/
 
     int stack_index = frame->slots_offset + index;
 
-    /*if (stack_index >= vm->stack_size) {
-        printf("[vm_load_local] ERROR: stack_index=%d >= stack_size=%d\n",
-               stack_index, vm->stack_size);
-        printf("  frame->slots_offset=%d, index=%d\n", frame->slots_offset, index);
-        return NIL_VAL;
-    }*/
-
     Value result = vm->stack[stack_index];
-
-    /*printf("[vm_load_local] index=%d, stack_index=%d, type=%s\n",
-           index, stack_index, vm_value_type_name(result));*/
 
     return result;
 }
@@ -537,9 +516,9 @@ Value vm_load_local(VM* vm, int index) {
 void vm_runtime_error(VM* vm, const char* format, ...) {
     va_list args;
     va_start(args, format);
-    fprintf(stderr, "Runtime error: ");
+    printf("Runtime error: ");
     vfprintf(stderr, format, args);
-    fprintf(stderr, "\n");
+    printf("\n");
     va_end(args);
 
     vm->error_count++;
@@ -548,14 +527,14 @@ void vm_runtime_error(VM* vm, const char* format, ...) {
 
 StringObject* vm_take_string(VM* vm, char* chars, int length) {
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] new StringObject len=%d\n", length);
+        printf("[GC-OBJ] new StringObject len=%d\n", length);
     }
 
     StringObject* str = (StringObject*)vm_realloc(
             vm, NULL, 0, sizeof(StringObject));
 
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] StringObject ptr=%p\n", (void*)str);
+        printf("[GC-OBJ] StringObject ptr=%p\n", (void*)str);
     }
 
     link_object(vm, (Object*)str, VAL_STRING);
@@ -568,13 +547,13 @@ StringObject* vm_take_string(VM* vm, char* chars, int length) {
 
 StringObject* vm_copy_string(VM* vm, const char* chars, int length) {
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] copy_string len=%d\n", length);
+        printf("[GC-OBJ] copy_string len=%d\n", length);
     }
 
     char* copy = (char*)vm_realloc(vm, NULL, 0, (size_t)length + 1);
 
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] copy_string buffer=%p\n", (void*)copy);
+        printf("[GC-OBJ] copy_string buffer=%p\n", (void*)copy);
     }
 
     memcpy(copy, chars, (size_t)length);
@@ -587,28 +566,28 @@ ArrayObject* vm_new_array(VM* vm, int capacity) {
     vm_gc_disable(vm);
 
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] new ArrayObject cap=%d\n", capacity);
+        printf("[GC-OBJ] new ArrayObject cap=%d\n", capacity);
     }
 
     ArrayObject* arr = (ArrayObject*)vm_realloc(
             vm, NULL, 0, sizeof(ArrayObject));
 
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] ArrayObject ptr=%p\n", (void*)arr);
+        printf("[GC-OBJ] ArrayObject ptr=%p\n", (void*)arr);
     }
 
     link_object(vm, (Object*)arr, VAL_ARRAY);
 
-    if (vm->debug_gc) fprintf(stderr, "[GC-OBJ] ArrayObject linked\n");
+    if (vm->debug_gc) printf("[GC-OBJ] ArrayObject linked\n");
 
     arr->capacity = capacity > 0 ? capacity : 0;
     arr->count = 0;
 
-    if (vm->debug_gc) fprintf(stderr, "[GC-OBJ] ArrayObject init cap=%d count=%d\n ", arr->capacity, arr->count);
+    if (vm->debug_gc) printf("[GC-OBJ] ArrayObject init cap=%d count=%d\n ", arr->capacity, arr->count);
 
     if (arr->capacity > 0) {
         if (vm->debug_gc) {
-            fprintf(stderr, "[GC-OBJ]   items alloc cap=%d size=%zu\n",
+            printf("[GC-OBJ]   items alloc cap=%d size=%zu\n",
                     arr->capacity, sizeof(Value) * (size_t)arr->capacity);
         }
 
@@ -616,13 +595,13 @@ ArrayObject* vm_new_array(VM* vm, int capacity) {
                 vm, NULL, 0, sizeof(Value) * (size_t)arr->capacity);
 
         if (vm->debug_gc) {
-            fprintf(stderr, "[GC-OBJ]   items ptr=%p\n", (void*)arr->items);
+            printf("[GC-OBJ]   items ptr=%p\n", (void*)arr->items);
         }
     } else {
-        if (vm->debug_gc) fprintf(stderr, "[GC-OBJ] ArrayObject cap 0");
+        if (vm->debug_gc) printf("[GC-OBJ] ArrayObject cap 0");
         arr->items = NULL;
     }
-    if (vm->debug_gc) fprintf(stderr, "[GC-OBJ] ArrayObject created");
+    if (vm->debug_gc) printf("[GC-OBJ] ArrayObject created");
 
     vm_gc_enable(vm);
 
@@ -663,7 +642,7 @@ void vm_array_append(VM* vm, ArrayObject* array, Value value) {
 NativeFunctionObject* vm_new_native_function(VM* vm, const char* name, NativeFn function, int arity) {
 
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] new NativeFn name=%s\n", name);
+        printf("[GC-OBJ] new NativeFn name=%s\n", name);
     }
 
     vm_gc_disable(vm);
@@ -672,7 +651,7 @@ NativeFunctionObject* vm_new_native_function(VM* vm, const char* name, NativeFn 
             vm, NULL, 0, sizeof(NativeFunctionObject));
 
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] NativeFn ptr=%p\n", (void*)nf);
+        printf("[GC-OBJ] NativeFn ptr=%p\n", (void*)nf);
     }
 
     link_object(vm, (Object*)nf, VAL_NATIVE_FN);
@@ -682,13 +661,13 @@ NativeFunctionObject* vm_new_native_function(VM* vm, const char* name, NativeFn 
 
     int len = (int)strlen(name);
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ]   name len=%d\n", len);
+        printf("[GC-OBJ]   name len=%d\n", len);
     }
 
     nf->name = (char*)vm_realloc(vm, NULL, 0, (size_t)len + 1);
 
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ]   name ptr=%p\n", (void*)nf->name);
+        printf("[GC-OBJ]   name ptr=%p\n", (void*)nf->name);
     }
 
     memcpy(nf->name, name, (size_t)len + 1);
@@ -706,7 +685,7 @@ FunctionObject* vm_new_function(VM* vm,
                                Bytecode* bytecode,
                                int func_index) {
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] new Function name=%s\n", name ? name : "");
+        printf("[GC-OBJ] new Function name=%s\n", name ? name : "");
     }
 
     vm_gc_disable(vm);
@@ -714,19 +693,19 @@ FunctionObject* vm_new_function(VM* vm,
     FunctionObject* fn = (FunctionObject*)vm_realloc(
         vm, NULL, 0, sizeof(FunctionObject));
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] Function ptr=%p\n", (void*)fn);
+        printf("[GC-OBJ] Function ptr=%p\n", (void*)fn);
     }
 
     link_object(vm, (Object*)fn, VAL_FUNCTION);
 
     int len = (int)strlen(name);
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] name len=%d\n", len);
+        printf("[GC-OBJ] name len=%d\n", len);
     }
 
     fn->name = (char*)vm_realloc(vm, NULL, 0, (size_t)len + 1);
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] name ptr=%p\n", (void*)fn->name);
+        printf("[GC-OBJ] name ptr=%p\n", (void*)fn->name);
     }
 
     memcpy(fn->name, name, (size_t)len + 1);
@@ -744,7 +723,7 @@ FunctionObject* vm_new_function(VM* vm,
 ClosureObject* vm_new_closure(VM* vm, FunctionObject* function) {
     uint8_t upvalue_count = function->upvalue_count;
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] new Closure func=%s upvalues=%d\n",
+        printf("[GC-OBJ] new Closure func=%s upvalues=%d\n",
                 function && function->name ? function->name : "",
                 upvalue_count);
     }
@@ -754,7 +733,7 @@ ClosureObject* vm_new_closure(VM* vm, FunctionObject* function) {
     ClosureObject* cl = (ClosureObject*)vm_realloc(
         vm, NULL, 0, sizeof(ClosureObject));
     if (vm->debug_gc) {
-        fprintf(stderr, "[GC-OBJ] Closure ptr=%p\n", (void*)cl);
+        printf("[GC-OBJ] Closure ptr=%p\n", (void*)cl);
     }
 
     link_object(vm, (Object*)cl, VAL_CLOSURE);
@@ -763,14 +742,14 @@ ClosureObject* vm_new_closure(VM* vm, FunctionObject* function) {
 
     if (cl->upvalue_count > 0) {
         if (vm->debug_gc) {
-            fprintf(stderr, "[GC-OBJ] upvalues count=%d\n",
+            printf("[GC-OBJ] upvalues count=%d\n",
                     cl->upvalue_count);
         }
 
         cl->upvalues = (Upvalue**)vm_realloc(
             vm, NULL, 0, sizeof(Upvalue*) * (size_t)cl->upvalue_count);
         if (vm->debug_gc) {
-            fprintf(stderr, "[GC-OBJ] upvalues ptr=%p\n",
+            printf("[GC-OBJ] upvalues ptr=%p\n",
                     (void*)cl->upvalues);
         }
 
@@ -1051,7 +1030,7 @@ int vm_op_neg(VM* vm) {
 
 int vm_op_not(VM* vm) {
     Value v = vm_pop(vm);
-    vm_push(vm, BOOL_VAL(!value_to_bool(v)));
+    vm_push(vm, BOOL_VAL(!value_to_bool(&v)));
     return 0;
 }
 
@@ -1139,14 +1118,14 @@ int vm_op_ge(VM* vm) {
 int vm_op_and(VM* vm) {
     Value b = vm_pop(vm);
     Value a = vm_pop(vm);
-    vm_push(vm, BOOL_VAL(value_to_bool(a) && value_to_bool(b)));
+    vm_push(vm, BOOL_VAL(value_to_bool(&a) && value_to_bool(&b)));
     return 0;
 }
 
 int vm_op_or(VM* vm) {
     Value b = vm_pop(vm);
     Value a = vm_pop(vm);
-    vm_push(vm, BOOL_VAL(value_to_bool(a) || value_to_bool(b)));
+    vm_push(vm, BOOL_VAL(value_to_bool(&a) || value_to_bool(&b)));
     return 0;
 }
 
@@ -1258,7 +1237,7 @@ int vm_op_jump_if_false_u16(VM* vm, CallFrame* frame, uint8_t* ip) {
     int16_t offset = (int16_t)read_u16(ip);
     ip += 2;
     Value cond = vm_pop(vm);
-    if (!value_to_bool(cond)) {
+    if (!value_to_bool(&cond)) {
         ip += offset;
     }
     frame->ip = ip;
@@ -1269,7 +1248,7 @@ int vm_op_jump_if_true_u16(VM* vm, CallFrame* frame, uint8_t* ip) {
     int16_t offset = (int16_t)read_u16(ip);
     ip += 2;
     Value cond = vm_pop(vm);
-    if (value_to_bool(cond)) {
+    if (value_to_bool(&cond)) {
         ip += offset;
     }
     frame->ip = ip;
@@ -1318,26 +1297,26 @@ int vm_op_call_u8(VM* vm, CallFrame* frame, uint8_t* ip) {
         Value* args = argc > 0 ? ALLOCATE(Value, argc) : NULL;
 
         if (vm->debug) {
-            fprintf(stderr, "[CALL] allocate native done\n");
+            printf("[CALL] allocate native done\n");
         }
         for (int i = 0; i < argc; i++) {
             args[i] = vm->stack[callee_index + 1 + i];
         }
         if (vm->debug) {
-            fprintf(stderr, "[CALL] native args loaded\n");
+            printf("[CALL] native args loaded\n");
         }
         Value result = nf->function(vm, argc, args);
         if (vm->debug) {
-            fprintf(stderr, "[CALL] native call result done\n");
+            printf("[CALL] native call result done\n");
         }
         if (argc > 0) FREE_ARRAY(Value, args, argc);
         if (vm->debug) {
-            fprintf(stderr, "[CALL] native free done\n");
+            printf("[CALL] native free done\n");
         }
         vm->sp = callee_index;
         vm_push(vm, result);
         if (vm->debug) {
-            fprintf(stderr, "[CALL] native done, new sp=%d\n", vm->sp);
+            printf("[CALL] native done, new sp=%d\n", vm->sp);
         }
     } else if (IS_CLOSURE(callee)) {
         ClosureObject* cl = AS_CLOSURE(callee);
@@ -1390,7 +1369,7 @@ int vm_op_call_u8(VM* vm, CallFrame* frame, uint8_t* ip) {
     }
 
     if (vm->debug) {
-        fprintf(stderr, "[DEBUG] CALL end\n");
+        printf("[DEBUG] CALL end\n");
     }
     return 0;
 }
@@ -1437,26 +1416,26 @@ int vm_op_call_u16(VM* vm, CallFrame* frame, uint8_t* ip) {
         Value* args = argc > 0 ? ALLOCATE(Value, argc) : NULL;
 
         if (vm->debug) {
-            fprintf(stderr, "[CALL] allocate native done\n");
+            printf("[CALL] allocate native done\n");
         }
         for (int i = 0; i < argc; i++) {
             args[i] = vm->stack[callee_index + 1 + i];
         }
         if (vm->debug) {
-            fprintf(stderr, "[CALL] native args loaded\n");
+            printf("[CALL] native args loaded\n");
         }
         Value result = nf->function(vm, argc, args);
         if (vm->debug) {
-            fprintf(stderr, "[CALL] native call result done\n");
+            printf("[CALL] native call result done\n");
         }
         if (argc > 0) FREE_ARRAY(Value, args, argc);
         if (vm->debug) {
-            fprintf(stderr, "[CALL] native free done\n");
+            printf("[CALL] native free done\n");
         }
         vm->sp = callee_index;
         vm_push(vm, result);
         if (vm->debug) {
-            fprintf(stderr, "[CALL] native done, new sp=%d\n", vm->sp);
+            printf("[CALL] native done, new sp=%d\n", vm->sp);
         }
     } else if (IS_CLOSURE(callee)) {
         ClosureObject* cl = AS_CLOSURE(callee);
@@ -1509,7 +1488,7 @@ int vm_op_call_u16(VM* vm, CallFrame* frame, uint8_t* ip) {
     }
 
     if (vm->debug) {
-        fprintf(stderr, "[DEBUG] CALL end\n");
+        printf("[DEBUG] CALL end\n");
     }
     return 0;
 }
@@ -1592,54 +1571,54 @@ int vm_op_array_new_u8(VM* vm, CallFrame* frame, uint8_t* ip) {
 }
 
 int vm_op_array_get(VM* vm) {
-    fprintf(stderr, "[vm_op_array_get ENTRY] vm=%p, sp=%d, stack=%p\n",
+    printf("[vm_op_array_get ENTRY] vm=%p, sp=%d, stack=%p\n",
             (void*)vm, vm->sp, (void*)vm->stack);
 
     if (vm->sp < 2) {
-        fprintf(stderr, "[vm_op_array_get] ERROR: stack underflow, sp=%d\n", vm->sp);
+        printf("[vm_op_array_get] ERROR: stack underflow, sp=%d\n", vm->sp);
         vm_runtime_error(vm, "ARRAY_GET stack underflow");
         return 1;
     }
 
     Value index = vm_pop(vm);
-    fprintf(stderr, "[vm_op_array_get] index popped: type=%d",
+    printf("[vm_op_array_get] index popped: type=%d",
             index.type);
 
     Value array = vm_pop(vm);
-    fprintf(stderr, "[vm_op_array_get] array popped: type=%d",
+    printf("[vm_op_array_get] array popped: type=%d",
             array.type);
 
     if (!IS_ARRAY(array)) {
-        fprintf(stderr, "[vm_op_array_get] ERROR: not an array, type=%d\n", array.type);
+        printf("[vm_op_array_get] ERROR: not an array, type=%d\n", array.type);
         vm_runtime_error(vm, "ARRAY_GET type error (not array)");
         return 1;
     }
 
     if (!IS_INT(index)) {
-        fprintf(stderr, "[vm_op_array_get] ERROR: index not int, type=%d\n", index.type);
+        printf("[vm_op_array_get] ERROR: index not int, type=%d\n", index.type);
         vm_runtime_error(vm, "ARRAY_GET type error (index not int)");
         return 1;
     }
 
     ArrayObject* arr = AS_ARRAY(array);
-    fprintf(stderr, "[vm_op_array_get] arr=%p, count=%d, capacity=%d\n",
+    printf("[vm_op_array_get] arr=%p, count=%d, capacity=%d\n",
             (void*)arr, arr->count, arr->capacity);
 
     int idx = (int)AS_INT(index);
-    fprintf(stderr, "[vm_op_array_get] accessing index=%d (count=%d)\n", idx, arr->count);
+    printf("[vm_op_array_get] accessing index=%d (count=%d)\n", idx, arr->count);
 
     if (idx < 0 || idx >= arr->count) {
-        fprintf(stderr, "[vm_op_array_get] ERROR: out of bounds idx=%d, count=%d\n",
+        printf("[vm_op_array_get] ERROR: out of bounds idx=%d, count=%d\n",
                 idx, arr->count);
         vm_runtime_error(vm, "ARRAY_GET out of bounds");
         return 1;
     }
 
     Value result = arr->items[idx];
-    fprintf(stderr, "[vm_op_array_get] result: type=%d\n", result.type);
+    printf("[vm_op_array_get] result: type=%d\n", result.type);
 
     vm_push(vm, result);
-    fprintf(stderr, "[vm_op_array_get] SUCCESS, sp now=%d\n", vm->sp);
+    printf("[vm_op_array_get] SUCCESS, sp now=%d\n", vm->sp);
     return 0;
 }
 
@@ -1691,11 +1670,51 @@ int vm_op_store_global_u16(VM* vm, CallFrame* frame, uint8_t* ip) {
     return 0;
 }
 
-
 int vm_op_print(VM* vm) {
     Value v = vm_pop(vm);
     vm_print_value(v);
     printf("\n");
+    return 0;
+}
+
+int jit_handle_return(VM* vm, CallFrame* frame, uint8_t* ip) {
+    Value result = vm_pop(vm);
+    CallFrame* old_frame = &vm->frames[vm->frame_count - 1];
+
+    vm_close_upvalues(vm, &vm->stack[frame->slots_offset]);
+
+    vm->sp = old_frame->slots_offset;
+
+    vm_pop_frame(vm);
+
+    if (vm->frame_count == 0) {
+        vm_push(vm, result);
+        return 0;
+    }
+
+    vm_push(vm, result);
+    frame = &vm->frames[vm->frame_count - 1];
+    ip = frame->ip;
+    return 0;
+}
+
+int jit_handle_return_nil(VM* vm, CallFrame* frame, uint8_t* ip) {
+    CallFrame* old_frame = &vm->frames[vm->frame_count - 1];
+
+    vm_close_upvalues(vm, &vm->stack[frame->slots_offset]);
+
+    vm->sp = old_frame->slots_offset;
+
+    vm_pop_frame(vm);
+
+    if (vm->frame_count == 0) {
+        vm_push(vm, NIL_VAL);
+        return 0;
+    }
+
+    vm_push(vm, NIL_VAL);
+    frame = &vm->frames[vm->frame_count - 1];
+    ip = frame->ip;
     return 0;
 }
 
