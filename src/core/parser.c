@@ -488,7 +488,13 @@ ASTNode* parse_assignment(Parser* parser) {
                 default: binary_operator = TOKEN_EQUAL;
             }
 
-            ASTNode* binary_expr = ast_new_binary(expr, value, binary_operator, expr->line, expr->column);
+            ASTNode* left_copy = ast_new_variable(
+                    expr->variable.name,
+                    expr->variable.name_length,
+                    expr->line,
+                    expr->column
+            );
+            ASTNode* binary_expr = ast_new_binary(left_copy, value, binary_operator, expr->line, expr->column);
             return ast_new_assign(expr, binary_expr, expr->line, expr->column);
         }
 

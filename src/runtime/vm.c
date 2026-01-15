@@ -926,17 +926,30 @@ int vm_op_add(VM* vm) {
     Value b = vm_pop(vm);
     Value a = vm_pop(vm);
 
-    if (IS_INT(a) && IS_INT(b)) {
+    if (IS_STRING(a) && IS_STRING(b)) {
+        StringObject* sa = AS_STRING(a);
+        StringObject* sb = AS_STRING(b);
+        int new_len = sa->length + sb->length;
+        char* chars = (char*)vm_realloc(vm, NULL, 0, (size_t)new_len + 1);
+        memcpy(chars, sa->chars, (size_t)sa->length);
+        memcpy(chars + sa->length, sb->chars, (size_t)sb->length);
+        chars[new_len] = '\0';
+        StringObject* new_str = vm_take_string(vm, chars, new_len);
+        vm_push(vm, OBJECT_VAL(new_str));
+    }
+    else if (IS_INT(a) && IS_INT(b)) {
         vm_push(vm, INT_VAL(AS_INT(a) + AS_INT(b)));
-    } else if ((IS_INT(a) || IS_FLOAT(a)) &&
-               (IS_INT(b) || IS_FLOAT(b))) {
-                    double da = IS_INT(a) ? (double)AS_INT(a) : AS_FLOAT(a);
-                    double db = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
-                    vm_push(vm, FLOAT_VAL(da + db));
-               } else {
-                    vm_runtime_error(vm, "ADD on non-numbers");
-                    return 1;
-               }
+    }
+    else if ((IS_INT(a) || IS_FLOAT(a)) &&
+             (IS_INT(b) || IS_FLOAT(b))) {
+        double da = IS_INT(a) ? (double)AS_INT(a) : AS_FLOAT(a);
+        double db = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
+        vm_push(vm, FLOAT_VAL(da + db));
+    }
+    else {
+        vm_runtime_error(vm, "ADD on non-numbers or non-strings");
+        return 1;
+    }
     return 0;
 }
 
