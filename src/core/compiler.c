@@ -889,15 +889,16 @@ CompileResult compile_literal(Compiler* compiler, const ASTNode* node, Bytecode*
     int const_idx = -1;
 
     switch (node->literal.value_type) {
-        case LIT_NUMBER: {
-            double value = node->literal.value.number;
-            int64_t iv = (int64_t)value;
-            compiler_debug_log(compiler, "  literal number=%g", value);
-            if ((double)iv == value) {
-                const_idx = compiler_add_const_int(bytecode, iv);
-            } else {
-                const_idx = compiler_add_const_float(bytecode, value);
-            }
+        case LIT_INT: {
+            int64_t value = node->literal.value.int_value;
+            compiler_debug_log(compiler, "  literal int=%g", value);
+            const_idx = compiler_add_const_int(bytecode, value);
+            break;
+        }
+        case LIT_FLOAT: {
+            double value = node->literal.value.float_value;
+            compiler_debug_log(compiler, "  literal float=%g", value);
+            const_idx = compiler_add_const_float(bytecode, value);
             break;
         }
         case LIT_STRING: {

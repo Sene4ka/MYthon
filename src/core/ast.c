@@ -43,10 +43,17 @@ ASTNode* ast_new_postfix(ASTNode* operand, TokenType operator, int line, int col
     return node;
 }
 
-ASTNode* ast_new_number_literal(double value, int line, int column) {
+ASTNode* ast_new_int_literal(int64_t value, int line, int column) {
     ASTNode* node = ast_new_node(NODE_LITERAL_EXPR, line, column);
-    node->literal.value_type = LIT_NUMBER;
-    node->literal.value.number = value;
+    node->literal.value_type = LIT_INT;
+    node->literal.value.int_value = value;
+    return node;
+}
+
+ASTNode* ast_new_float_literal(double value, int line, int column) {
+    ASTNode* node = ast_new_node(NODE_LITERAL_EXPR, line, column);
+    node->literal.value_type = LIT_FLOAT;
+    node->literal.value.float_value = value;
     return node;
 }
 
@@ -435,9 +442,13 @@ void ast_print(const ASTNode* node, int indent) {
 
         case NODE_LITERAL_EXPR:
             switch (node->literal.value_type) {
-                case LIT_NUMBER:
-                    printf("Literal(number=%.6g) at %d:%d\n",
-                           node->literal.value.number, node->line, node->column);
+                case LIT_INT:
+                    printf("Literal(int=%lld) at %d:%d\n",
+                           node->literal.value.int_value, node->line, node->column);
+                    break;
+                case LIT_FLOAT:
+                    printf("Literal(float=%.6g) at %d:%d\n",
+                           node->literal.value.float_value, node->line, node->column);
                     break;
                 case LIT_STRING:
                     printf("Literal(string=\"%s\") at %d:%d\n",

@@ -2,7 +2,6 @@
 #include "memory.h"
 #include <ctype.h>
 #include <string.h>
-#include <stdio.h>
 #include <stdlib.h>
 
 #include "utils.h"
@@ -445,7 +444,17 @@ char* token_copy_text(const Token* token) {
     return result;
 }
 
-double token_as_number(const Token* token) {
+int64_t token_as_int(const Token* token) {
+    if (token->type != TOKEN_NUMBER) {
+        return 0.0;
+    }
+    char* text = token_copy_text(token);
+    int64_t value = atoll(text);
+    FREE_ARRAY(char, text, token->length + 1);
+    return value;
+}
+
+double token_as_float(const Token* token) {
     if (token->type != TOKEN_NUMBER) {
         return 0.0;
     }

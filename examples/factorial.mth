@@ -7,3 +7,4 @@ fn factorial(n) {
 
 print("Факториал 20:", factorial(20))
 print("Факториал 21:", factorial(21))
+print("Факториал 21.0:", factorial(21.0))
