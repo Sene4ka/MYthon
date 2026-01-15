@@ -70,15 +70,15 @@ void parser_error(Parser* parser, const char* message) {
     if (parser->panic_mode) return;
     parser->panic_mode = 1;
     parser->error_count++;
-    fprintf(stderr, "[%s:%d:%d] Ошибка",
+    fprintf(stderr, "[%s:%d:%d] Error",
             parser->source_file ? parser->source_file : "<source>",
             parser->previous.line,
             parser->previous.column);
     if (parser->previous.type == TOKEN_EOF) {
-        fprintf(stderr, " в конце файла");
+        fprintf(stderr, " in the end of file");
     } else if (parser->previous.type != TOKEN_ERROR) {
         char* text = token_copy_text(&parser->previous);
-        fprintf(stderr, " на токене '%.*s'", (int)parser->previous.length, text);
+        fprintf(stderr, " on token '%.*s'", (int)parser->previous.length, text);
         FREE_ARRAY(char, text, parser->previous.length + 1);
     }
     fprintf(stderr, ": %s\n", message);
@@ -89,15 +89,15 @@ void parser_error_at(Parser* parser, const Token* token, const char* message) {
     if (parser->panic_mode) return;
     parser->panic_mode = 1;
     parser->error_count++;
-    fprintf(stderr, "[%s:%d:%d] Ошибка",
+    fprintf(stderr, "[%s:%d:%d] Error",
             parser->source_file ? parser->source_file : "<source>",
             token->line,
             token->column);
     if (token->type == TOKEN_EOF) {
-        fprintf(stderr, " в конце файла");
+        fprintf(stderr, " in the end of file");
     } else if (token->type != TOKEN_ERROR) {
         char* text = token_copy_text(token);
-        fprintf(stderr, " на токене '%.*s'", (int)token->length, text);
+        fprintf(stderr, " on token '%.*s'", (int)token->length, text);
         FREE_ARRAY(char, text, token->length + 1);
     }
     fprintf(stderr, ": %s\n", message);
@@ -183,7 +183,7 @@ ASTNode* parse_declaration(Parser* parser) {
 
 ASTNode* parse_var_declaration(Parser* parser) {
     Token name = parser->current;
-    parser_consume(parser, TOKEN_IDENTIFIER, "Ожидается имя переменной");
+    parser_consume(parser, TOKEN_IDENTIFIER, "Expected variable name");
     ASTNode* initializer = NULL;
     if (parser_match(parser, TOKEN_EQUAL)) {
         initializer = parse_expression(parser);
@@ -219,9 +219,9 @@ ASTNode* parse_if_statement(Parser* parser) {
     int line = parser->previous.line;
     int column = parser->previous.column;
 
-    parser_consume(parser, TOKEN_LEFT_PAREN, "Ожидается '(' после 'if'");
+    parser_consume(parser, TOKEN_LEFT_PAREN, "Expected '(' after 'if'");
     ASTNode* condition = parse_expression(parser);
-    parser_consume(parser, TOKEN_RIGHT_PAREN, "Ожидается ')' после условия");
+    parser_consume(parser, TOKEN_RIGHT_PAREN, "Expected ')' after condition");
 
     ASTNode* then_branch = parse_statement(parser);
 
@@ -237,9 +237,9 @@ ASTNode* parse_while_statement(Parser* parser) {
     int line = parser->previous.line;
     int column = parser->previous.column;
     parser->in_loop++;
-    parser_consume(parser, TOKEN_LEFT_PAREN, "Ожидается '(' после 'while'");
+    parser_consume(parser, TOKEN_LEFT_PAREN, "Expected '(' after 'while'");
     ASTNode* condition = parse_expression(parser);
-    parser_consume(parser, TOKEN_RIGHT_PAREN, "Ожидается ')' после условия");
+    parser_consume(parser, TOKEN_RIGHT_PAREN, "Expected ')' after condition");
     ASTNode* body = parse_statement(parser);
     parser->in_loop--;
     return ast_new_for(NULL, condition, NULL, body, line, column);
@@ -250,16 +250,16 @@ static ASTNode* parse_for_statement(Parser* parser) {
     int column = parser->previous.column;
 
     parser->in_loop++;
-    parser_consume(parser, TOKEN_LEFT_PAREN, "Ожидается '(' после 'for'");
+    parser_consume(parser, TOKEN_LEFT_PAREN, "Expected '(' after 'for'");
 
     ASTNode* initializer = NULL;
     if (!parser_match(parser, TOKEN_SEMICOLON)) {
         if (parser_match(parser, TOKEN_LET)) {
             initializer = parse_var_declaration_no_semi(parser);
-            parser_consume(parser, TOKEN_SEMICOLON, "Ожидается ';' после инициализации for");
+            parser_consume(parser, TOKEN_SEMICOLON, "Expected ';' after initializer in 'for'");
         } else {
             initializer = parse_expression(parser);
-            parser_consume(parser, TOKEN_SEMICOLON, "Ожидается ';' после инициализации for");
+            parser_consume(parser, TOKEN_SEMICOLON, "Ожидается ';' after initializer in 'for'");
         }
     }
 
@@ -268,14 +268,14 @@ static ASTNode* parse_for_statement(Parser* parser) {
         condition = parse_expression(parser);
     }
 
-    parser_consume(parser, TOKEN_SEMICOLON, "Ожидается ';' после условия for");
+    parser_consume(parser, TOKEN_SEMICOLON, "Expected ';' after a condition in 'for'");
 
     ASTNode* increment = NULL;
     if (!parser_check(parser, TOKEN_RIGHT_PAREN)) {
         increment = parse_expression(parser);
     }
 
-    parser_consume(parser, TOKEN_RIGHT_PAREN, "Ожидается ')' после инкремента for");
+    parser_consume(parser, TOKEN_RIGHT_PAREN, "Expected ')' after increment in 'for'");
 
     ASTNode* body = parse_statement(parser);
     parser->in_loop--;
@@ -285,7 +285,7 @@ static ASTNode* parse_for_statement(Parser* parser) {
 
 ASTNode* parse_break_statement(Parser* parser) {
     if (!parser->in_loop) {
-        parser_error_at_current(parser, "'break' можно использовать только внутри цикла");
+        parser_error_at_current(parser, "'break' can be used only inside cycle");
     }
     int line = parser->previous.line;
     int column = parser->previous.column;
@@ -297,7 +297,7 @@ ASTNode* parse_block_statement(Parser* parser) {
     int line = parser->current.line;
     int column = parser->current.column;
 
-    parser_consume(parser, TOKEN_LEFT_BRACE, "Ожидается '{'");
+    parser_consume(parser, TOKEN_LEFT_BRACE, "Expected '{'");
 
     ASTNode* statements = NULL;
     ASTNode* last_stmt = NULL;
@@ -328,7 +328,7 @@ ASTNode* parse_block_statement(Parser* parser) {
         }
     }
 
-    parser_consume(parser, TOKEN_RIGHT_BRACE, "Ожидается '}' после блока");
+    parser_consume(parser, TOKEN_RIGHT_BRACE, "Expected '}' after block");
     return ast_new_block(statements, line, column);
 }
 
@@ -361,7 +361,7 @@ ASTNode* parse_block_statement_from_brace(Parser* parser) {
             parser_match(parser, TOKEN_SEMICOLON);
         }
     }
-    parser_consume(parser, TOKEN_RIGHT_BRACE, "Ожидается '}' после блока");
+    parser_consume(parser, TOKEN_RIGHT_BRACE, "Expected '}' after block");
     return ast_new_block(statements, line, column);
 }
 
@@ -371,16 +371,16 @@ ASTNode* parse_function_statement(Parser* parser) {
     parser->in_function++;
 
     Token name = parser->current;
-    parser_consume(parser, TOKEN_IDENTIFIER, "Ожидается имя функции");
+    parser_consume(parser, TOKEN_IDENTIFIER, "Expected function name");
 
-    parser_consume(parser, TOKEN_LEFT_PAREN, "Ожидается '(' после имени функции");
+    parser_consume(parser, TOKEN_LEFT_PAREN, "Expected'(' after function name");
 
     char** params = NULL;
     size_t param_count = 0;
     if (!parser_check(parser, TOKEN_RIGHT_PAREN)) {
         parse_parameter_list(parser, &params, &param_count);
     }
-    parser_consume(parser, TOKEN_RIGHT_PAREN, "Ожидается ')' после параметров");
+    parser_consume(parser, TOKEN_RIGHT_PAREN, "Expected ')' after parameters");
 
     ASTNode* body = parse_block_statement(parser);
 
@@ -399,7 +399,7 @@ int parse_parameter_list(Parser* parser, char*** params, size_t* param_count) {
             *params = GROW_ARRAY(char*, *params, *param_count, capacity);
         }
         Token param = parser->current;
-        parser_consume(parser, TOKEN_IDENTIFIER, "Ожидается имя параметра");
+        parser_consume(parser, TOKEN_IDENTIFIER, "Expected parameter name");
         (*params)[*param_count] = ALLOCATE(char, param.length + 1);
         memcpy((*params)[*param_count], param.start, param.length);
         (*params)[*param_count][param.length] = '\0';
@@ -413,7 +413,7 @@ ASTNode* parse_return_statement(Parser* parser) {
     int column = parser->previous.column;
 
     if (!parser->in_function) {
-        parser_error(parser, "'return' можно использовать только внутри функции");
+        parser_error(parser, "'return' can be used only inside a function");
     }
 
     ASTNode* value = NULL;
@@ -439,14 +439,14 @@ ASTNode* parse_anonymous_function(Parser* parser) {
     int line = parser->previous.line;
     int column = parser->previous.column;
     parser->in_function++;
-    parser_consume(parser, TOKEN_LEFT_PAREN, "Ожидается '(' после 'fn'");
+    parser_consume(parser, TOKEN_LEFT_PAREN, "Expected '(' after 'fn'");
     char** params = NULL;
     size_t param_count = 0;
     if (!parser_check(parser, TOKEN_RIGHT_PAREN)) {
         parse_parameter_list(parser, &params, &param_count);
     }
-    parser_consume(parser, TOKEN_RIGHT_PAREN, "Ожидается ')' после параметров");
-    parser_consume(parser, TOKEN_LEFT_BRACE, "Ожидается '{' перед телом функции");
+    parser_consume(parser, TOKEN_RIGHT_PAREN, "Expected ')' after parameters");
+    parser_consume(parser, TOKEN_LEFT_BRACE, "Expected '{' before function body");
     ASTNode* body = parse_block_statement_from_brace(parser);
     parser->in_function--;
     return ast_new_function(NULL, 0, params, param_count, body, line, column);
@@ -458,7 +458,7 @@ ASTNode* parse_assignment(Parser* parser) {
 
     if (parser_match(parser, TOKEN_QUESTION)) {
         ASTNode* then_expr = parse_expression(parser);
-        parser_consume(parser, TOKEN_COLON, "Ожидается ':' в тернарном операторе");
+        parser_consume(parser, TOKEN_COLON, "Expected ':' in ternary operator");
         ASTNode* else_expr = parse_assignment(parser);
         return ast_new_ternary(expr, then_expr, else_expr, expr->line, expr->column);
     }
@@ -498,7 +498,7 @@ ASTNode* parse_assignment(Parser* parser) {
             return ast_new_assign(expr, binary_expr, expr->line, expr->column);
         }
 
-        parser_error_at_current(parser, "Недопустимый левый операнд для присваивания");
+        parser_error_at_current(parser, "Invalid left operand for assignment");
         return expr;
         }
 
@@ -632,7 +632,7 @@ static ASTNode* parse_call(Parser* parser, ASTNode* callee) {
         args = parse_argument_list(parser, &arg_count);
     }
 
-    parser_consume(parser, TOKEN_RIGHT_PAREN, "Ожидается ')' после аргументов");
+    parser_consume(parser, TOKEN_RIGHT_PAREN, "Expected ')' after arguments");
 
     return ast_new_call(callee, args, arg_count, line, column);
 }
@@ -655,7 +655,7 @@ ASTNode* parse_postfix(Parser* parser) {
         }
         else if (parser_match(parser, TOKEN_DOT)) {
             Token member = parser->current;
-            parser_consume(parser, TOKEN_IDENTIFIER, "Ожидается имя после '.'");
+            parser_consume(parser, TOKEN_IDENTIFIER, "Expected name after '.'");
 
             if (parser_check(parser, TOKEN_LEFT_PAREN)) {
                 parser_match(parser, TOKEN_LEFT_PAREN);
@@ -677,12 +677,12 @@ ASTNode* parse_postfix(Parser* parser) {
                     } while (parser_match(parser, TOKEN_COMMA));
                 }
 
-                parser_consume(parser, TOKEN_RIGHT_PAREN, "Ожидается ')' после аргументов");
+                parser_consume(parser, TOKEN_RIGHT_PAREN, "Expected ')' after arguments");
 
                 ASTNode* callee = ast_new_variable((const char*)member.start, member.length, member.line, member.column);
                 expr = ast_new_call(callee, args, arg_count, member.line, member.column);
             } else {
-                parser_error_at_current(parser, "Доступ к свойствам без вызова не поддерживается");
+                parser_error_at_current(parser, "Accessing properties without a call is not supported");
             }
         }
         else {
@@ -719,7 +719,7 @@ ASTNode* parse_primary(Parser* parser) {
     }
     if (parser_match(parser, TOKEN_LEFT_PAREN)) {
         ASTNode* expr = parse_expression(parser);
-        parser_consume(parser, TOKEN_RIGHT_PAREN, "Ожидается ')' после выражения");
+        parser_consume(parser, TOKEN_RIGHT_PAREN, "Expected ')' after expression");
         ASTNode* node = ast_new_node(NODE_GROUP_EXPR, parser->previous.line, parser->previous.column);
         node->unary.operand = expr;
         return node;
@@ -727,7 +727,7 @@ ASTNode* parse_primary(Parser* parser) {
     if (parser_match(parser, TOKEN_LEFT_BRACKET)) {
         return parse_array_literal(parser);
     }
-    parser_error_at_current(parser, "Ожидается выражение");
+    parser_error_at_current(parser, "Expected expression");
     return NULL;
 }
 
@@ -763,7 +763,7 @@ ASTNode* parse_array_literal(Parser* parser) {
             element_count++;
         } while (parser_match(parser, TOKEN_COMMA));
     }
-    parser_consume(parser, TOKEN_RIGHT_BRACKET, "Ожидается ']' после элементов массива");
+    parser_consume(parser, TOKEN_RIGHT_BRACKET, "Expected ']' after array elements");
     return ast_new_array(elements, element_count, line, column);
 }
 
@@ -771,12 +771,12 @@ ASTNode* parse_index(Parser* parser, ASTNode* array) {
     int line = parser->previous.line;
     int column = parser->previous.column;
     ASTNode* index = parse_expression(parser);
-    parser_consume(parser, TOKEN_RIGHT_BRACKET, "Ожидается ']' после индекса");
+    parser_consume(parser, TOKEN_RIGHT_BRACKET, "Expected ']' after index");
     return ast_new_index(array, index, line, column);
 }
 static ASTNode* parse_var_declaration_no_semi(Parser* parser) {
     Token name = parser->current;
-    parser_consume(parser, TOKEN_IDENTIFIER, "Ожидается имя переменной");
+    parser_consume(parser, TOKEN_IDENTIFIER, "Expected variable name");
     ASTNode* initializer = NULL;
     if (parser_match(parser, TOKEN_EQUAL)) {
         initializer = parse_expression(parser);
@@ -805,5 +805,5 @@ static void consume_semicolon(Parser* parser) {
         return;
     }
 
-    parser_error_at_current(parser, "Ожидается ';' или новая строка");
+    parser_error_at_current(parser, "Expected ';' or new line");
 }

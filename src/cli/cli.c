@@ -29,7 +29,7 @@ CLIArgs parse_args(int argc, char** argv) {
     args.verbose    = 0;
     args.disassemble = 0;
 
-    args.jit_enabled = 0;
+    args.jit_enabled = 1;
     args.jit_opt_level = 2;
     args.jit_opt_threshold = 10;
     args.jit_native_threshold = 10;
@@ -90,8 +90,8 @@ CLIArgs parse_args(int argc, char** argv) {
             else if (!strcmp(argv[i], "--debug-jit")) {
                 args.debug_jit = 1;
             }
-            else if (!strcmp(argv[i], "--jit")) {
-                args.jit_enabled = 1;
+            else if (!strcmp(argv[i], "--no-jit")) {
+                args.jit_enabled = 0;
             }
             else if (!strcmp(argv[i], "--jit-O0")) {
                 args.jit_enabled = 1;
@@ -156,7 +156,7 @@ void print_usage(void) {
     printf("  --debug-jit                Debug JIT compiler\n");
     printf("\n");
     printf("JIT Compilation (Tiered):\n");
-    printf("  --jit                      Enable JIT compiler (default: -O2)\n");
+    printf("  --no-jit                   Disable JIT compiler (default: JIT, -O2(thr. 10), native(thr. 50))\n");
     printf("  --jit-O0                   JIT without optimizations\n");
     printf("  --jit-O1                   JIT with basic optimizations\n");
     printf("  --jit-O2                   JIT with all optimizations\n");

@@ -1,4 +1,4 @@
-a = 10
-for (let i = 0; i < 10; i = i + 1) {
-    print(a)
+a = 10e2
+for (i = 0; i < 10; i++) {
+    print(a + i)
 }

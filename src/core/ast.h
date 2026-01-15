@@ -1,7 +1,6 @@
 #ifndef MYTHON_AST_H
 #define MYTHON_AST_H
 
-#include <stddef.h>
 #include "lexer.h"
 
 typedef enum {
