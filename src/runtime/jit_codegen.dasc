@@ -122,64 +122,6 @@ do { \
 #define VAL_CLOSURE 8
 #define VAL_UPVALUE 9
 
-|.macro pop_stack, type_reg, data_reg
-  | mov eax, dword [rbx + VM_SP_OFFSET]
-  | dec eax
-  | mov dword [rbx + VM_SP_OFFSET], eax
-  | mov rdx, [rbx + VM_STACK_OFFSET]
-  | lea rsi, [rdx + rax*16]
-  | mov type_reg, dword [rsi]
-  | mov data_reg, [rsi + VALUE_DATA_OFFSET]
-|.endmacro
-
-|.macro value_to_bool, type_reg, data_reg, out_reg
-  | mov r8d, type_reg
-  | mov r9, data_reg
-
-  | cmp r8d, VAL_BOOL
-  | je ->bool_case
-
-  | cmp r8d, VAL_NIL
-  | je ->nil_case
-
-  | cmp r8d, VAL_INT
-  | je ->int_case
-
-  | cmp r8d, VAL_FLOAT
-  | je ->float_case
-
-  | mov out_reg, 1
-  | jmp ->done
-
-|->bool_case:
-  | mov out_reg, r9
-  | jmp ->done
-
-|->nil_case:
-  | xor out_reg, out_reg
-  | jmp ->done
-
-|->int_case:
-  | xor out_reg, out_reg
-  | test r9, r9
-  | setnz al
-  | movzx out_reg, al
-  | jmp ->done
-
-|->float_case:
-  | mov [rsp + 48], r9
-  | movsd xmm0, qword [rsp + 48]
-  | xorpd xmm1, xmm1
-  | ucomisd xmm0, xmm1
-  | setnz al
-  | setp cl
-  | or al, cl
-  | and al, 1
-  | movzx out_reg, al
-
-|->done:
-|.endmacro
-
 // JitCodegen Structure
 struct JitCodegen {
     dasm_State* d;
@@ -192,48 +134,48 @@ struct JitCodegen {
 };
 
 
-JitCodegen* jit_codegen_new(void) {
+JitCodegen* jit_codegen_new(int debug) {
     JitCodegen* cg = malloc(sizeof(JitCodegen));
     if (!cg) {
-        fprintf(stderr, "[CODEGEN-NEW] malloc failed for JitCodegen\n");
+        if (debug) fprintf(stderr, "[CODEGEN-NEW] malloc failed for JitCodegen\n");
         return NULL;
     }
 
-    fprintf(stderr, "[CODEGEN-NEW] Allocated JitCodegen at %p\n", (void*)cg);
+    if (debug) fprintf(stderr, "[CODEGEN-NEW] Allocated JitCodegen at %p\n", (void*)cg);
 
     // Allocate labels array for DynASM globals
     cg->labels = (void**)calloc(lbl__MAX, sizeof(void*));
-    if (!cg->labels) {  // ← ИСПРАВЛЕНО: было if (globals)
-        fprintf(stderr, "[CODEGEN-NEW] calloc failed for labels\n");
+    if (!cg->labels) {
+        if (debug) fprintf(stderr, "[CODEGEN-NEW] calloc failed for labels\n");
         free(cg);
         return NULL;
     }
 
-    fprintf(stderr, "[CODEGEN-NEW] Allocated labels at %p\n", (void*)cg->labels);
+    if (debug) fprintf(stderr, "[CODEGEN-NEW] Allocated labels at %p\n", (void*)cg->labels);
 
     // Initialize DynASM
     cg->d = NULL;
     dasm_State** Dst = &cg->d;
 
-    fprintf(stderr, "[CODEGEN-NEW] Calling dasm_init...\n");
+    if (debug) fprintf(stderr, "[CODEGEN-NEW] Calling dasm_init...\n");
     dasm_init(Dst, DASM_MAXSECTION);
 
     if (!cg->d) {
-        fprintf(stderr, "[CODEGEN-NEW] dasm_init failed!\n");
+        if (debug) fprintf(stderr, "[CODEGEN-NEW] dasm_init failed!\n");
         free(cg->labels);
         free(cg);
         return NULL;
     }
 
-    fprintf(stderr, "[CODEGEN-NEW] dasm_init OK, d=%p\n", (void*)cg->d);
+    if (debug) fprintf(stderr, "[CODEGEN-NEW] dasm_init OK, d=%p\n", (void*)cg->d);
 
-    fprintf(stderr, "[CODEGEN-NEW] Calling dasm_setupglobal...\n");
+    if (debug) fprintf(stderr, "[CODEGEN-NEW] Calling dasm_setupglobal...\n");
     dasm_setupglobal(Dst, cg->labels, lbl__MAX);
 
-    fprintf(stderr, "[CODEGEN-NEW] Calling dasm_setup...\n");
+    if (debug) fprintf(stderr, "[CODEGEN-NEW] Calling dasm_setup...\n");
     dasm_setup(Dst, actions);
 
-    fprintf(stderr, "[CODEGEN-NEW] Success!\n");
+    if (debug) fprintf(stderr, "[CODEGEN-NEW] Success!\n");
 
     cg->code_ptr = NULL;
     cg->code_size = 0;
@@ -382,16 +324,16 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
     // Prologue
     | push rbp
     | mov rbp, rsp
-    | push rbx                  // Сохраняем rbx (callee-saved)
+    | push rbx
     | push r12
     | push r13
     | push r14
     | push r15
     | sub rsp, 72
     #ifdef _WIN32
-    | mov rbx, rcx              // rbx = VM* (callee-saved, не нужно backup)
+    | mov rbx, rcx
     #else
-    | mov rbx, rdi              // rbx = VM* (callee-saved, не нужно backup)
+    | mov rbx, rdi
     #endif
 
     // Dispatch loop
@@ -401,11 +343,8 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         uint8_t opcode = bc->code[ip];
         OpCode op = (OpCode)opcode;
 
-        printf("[%zu] ip=%u, opcode=0x%02x (%d)\n", i, ip, op, op);
-
         // Define label if needed
         if (i < cg->label_count && cg->label_positions[i] > 0) {
-            printf("[LABEL] label=%zu at ip=%u\n", i, ip);
             |=>(i):
         }
         switch (op) {
@@ -418,6 +357,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | jmp ->cleanup
             break;
 
+        // Arithmetic
         case OP_ADD: {
             #ifdef _WIN32
             | sub rsp, 32
@@ -520,7 +460,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             break;
         }
 
-        // ========== LOGIC ==========
+        // Logic
         case OP_NOT: {
             #ifdef _WIN32
             | sub rsp, 32
@@ -708,10 +648,10 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
             #ifdef _WIN32
             | sub rsp, 32
-            | mov rcx, rbx                          // vm
-            | mov64 rdx, (uintptr_t)bc              // bytecode
-            | mov r8, r9                            // frame
-            | mov64 r9, (uintptr_t)&bc->code[ip+1]  // ip (4th arg goes to r9)
+            | mov rcx, rbx
+            | mov64 rdx, (uintptr_t)bc
+            | mov r8, r9
+            | mov64 r9, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_load_const_u16
             | call rax
             | add rsp, 32
@@ -727,6 +667,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | jnz ->error
             break;
         }
+
         // Locals
         case OP_LOAD_LOCAL_U8: {
             | mov r9d, dword [rbx + VM_FRAMECOUNT_OFFSET]
@@ -737,10 +678,10 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | lea r9, [r10 + rax]
 
             #ifdef _WIN32
-            | sub rsp, 32                           // Shadow space
-            | mov rcx, rbx                          // vm
-            | mov rdx, r9                           // frame
-            | mov64 r8, (uintptr_t)&bc->code[ip+1] // ip
+            | sub rsp, 32
+            | mov rcx, rbx
+            | mov rdx, r9
+            | mov64 r8, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_load_local_u8
             | call rax
             | add rsp, 32
@@ -791,13 +732,13 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
-            | lea r9, [r10 + rax]                   // r9 = frame
+            | lea r9, [r10 + rax]
 
             #ifdef _WIN32
             | sub rsp, 32
-            | mov rcx, rbx                          // vm
-            | mov rdx, r9                           // frame
-            | mov64 r8, (uintptr_t)&bc->code[ip+1]  // ip
+            | mov rcx, rbx
+            | mov rdx, r9
+            | mov64 r8, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_load_global_u16
             | call rax
             | add rsp, 32
@@ -824,7 +765,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             #ifdef _WIN32
             | sub rsp, 32
             | mov rcx, rbx
-            | mov rdx, r9                           // frame
+            | mov rdx, r9
             | mov64 r8, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_store_global_u16
             | call rax
@@ -848,21 +789,16 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             int16_t off = (int16_t)((byte1 << 8) | byte2);
             uint32_t target = ip + 3 + (int32_t)off;
 
-            printf("[Codegen JUMP] ip=%u, off=%d, target=%u\n", ip, off, target);
-
             if (target >= fn->code_end) {
                 | jmp ->cleanup
             } else if (target < fn->code_start) {
-                fprintf(stderr, "[Codegen] ERROR: JUMP target before start\n");
+                if (debug) fprintf(stderr, "[Codegen] ERROR: JUMP target before start\n");
                 return NULL;
             } else {
                 int t_index = offset_to_index[target - fn->code_start];
                 if (t_index < 0) {
-                    fprintf(stderr, "[Codegen] ERROR: JUMP target=%u not found in insn_map\n", target);
+                    if (debug) fprintf(stderr, "[Codegen] ERROR: JUMP target=%u not found in insn_map\n", target);
                     return NULL;
-                }
-                if (debug) {
-                    printf("[Codegen JUMP] jumping to label %d\n", t_index);
                 }
                 | jmp =>(t_index)
             }
@@ -875,26 +811,29 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             int16_t off = (int16_t)((byte1 << 8) | byte2);
             uint32_t target = ip + 3 + (int32_t)off;
 
-            printf("[Codegen JUMP_IF_FALSE] ip=%u, target=%u\n", ip, target);
-
-            // Pop condition
-            | pop_stack r10d, r11
-            | value_to_bool r10d, r11, r11
-            | test r11, r11
+            #ifdef _WIN32
+            | sub rsp, 32
+            | mov rcx, rbx
+            | mov64 rax, (uintptr_t)jit_pop_and_test_bool
+            | call rax
+            | add rsp, 32
+            #else
+            | mov rdi, rbx
+            | mov64 rax, (uintptr_t)jit_pop_and_test_bool
+            | call rax
+            #endif
+            | test rax, rax
 
             if (target >= fn->code_end) {
                 | jz ->cleanup
             } else if (target < fn->code_start) {
-                fprintf(stderr, "[Codegen] ERROR: JUMP_IF_FALSE target before start\n");
+                if (debug) fprintf(stderr, "[Codegen] ERROR: JUMP_IF_FALSE target before start\n");
                 return NULL;
             } else {
                 int t_index = offset_to_index[target - fn->code_start];
                 if (t_index < 0) {
-                    fprintf(stderr, "[Codegen] ERROR: JUMP_IF_FALSE target=%u not found in insn_map\n", target);
+                    if (debug) fprintf(stderr, "[Codegen] ERROR: JUMP_IF_FALSE target=%u not found in insn_map\n", target);
                     return NULL;
-                }
-                if (debug) {
-                    printf("[Codegen JUMP_IF_FALSE] jumping to label %d\n", t_index);
                 }
                 | jz =>(t_index)
             }
@@ -908,21 +847,22 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             int16_t off = (int16_t)((byte1 << 8) | byte2);
             uint32_t target = ip + 3 + (int32_t)off;
 
-            /*if (debug) {
-                printf("[Codegen JUMP_IF_TRUE] ip=%u, bytes=[%02x %02x], off=%d, target=%u\n",
-                       ip, byte1, byte2, off, target);
-            }*/
-
-            // Pop condition
-            | pop_stack r10d, r11
-            | value_to_bool r10d, r11, r11
-            | test r11, r11
+            #ifdef _WIN32
+            | sub rsp, 32
+            | mov rcx, rbx
+            | mov64 rax, (uintptr_t)jit_pop_and_test_bool
+            | call rax
+            | add rsp, 32
+            #else
+            | mov rdi, rbx
+            | mov64 rax, (uintptr_t)jit_pop_and_test_bool
+            | call rax
+            #endif
+            | test rax, rax
 
             if (target >= fn->code_end) {
-                //if (debug) printf("  Jump to epilogue\n");
                 | jnz ->cleanup
             } else if (target < fn->code_start) {
-                //fprintf(stderr, "[Codegen] ERROR: JUMP_IF_TRUE target before start\n");
                 return NULL;
             } else {
                 int t_index = offset_to_index[target - fn->code_start];
@@ -939,13 +879,13 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
-            | lea r9, [r10 + rax]                   // r9 = frame
+            | lea r9, [r10 + rax]
 
             #ifdef _WIN32
             | sub rsp, 32
-            | mov rcx, rbx                          // vm
-            | mov rdx, r9                           // frame
-            | mov64 r8, (uintptr_t)&bc->code[ip+1]  // ip
+            | mov rcx, rbx
+            | mov rdx, r9
+            | mov64 r8, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_call_u8
             | call rax
             | add rsp, 32
@@ -972,7 +912,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             #ifdef _WIN32
             | sub rsp, 32
             | mov rcx, rbx
-            | mov rdx, r9                           // frame
+            | mov rdx, r9
             | mov64 r8, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_call_u16
             | call rax
@@ -996,13 +936,13 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
-            | lea r9, [r10 + rax]                   // r9 = frame
+            | lea r9, [r10 + rax]
 
             #ifdef _WIN32
             | sub rsp, 32
-            | mov rcx, rbx                          // vm
-            | mov rdx, r9                           // frame
-            | mov64 r8, (uintptr_t)&bc->code[ip+1]  // ip
+            | mov rcx, rbx
+            | mov rdx, r9
+            | mov64 r8, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)jit_handle_return
             | call rax
             | add rsp, 32
@@ -1023,13 +963,13 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
-            | lea r9, [r10 + rax]                   // r9 = frame
+            | lea r9, [r10 + rax]
 
             #ifdef _WIN32
             | sub rsp, 32
-            | mov rcx, rbx                          // vm
-            | mov rdx, r9                           // frame
-            | mov64 r8, (uintptr_t)&bc->code[ip+1]  // ip
+            | mov rcx, rbx
+            | mov rdx, r9
+            | mov64 r8, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)jit_handle_return_nil
             | call rax
             | add rsp, 32
@@ -1051,13 +991,13 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
-            | lea r9, [r10 + rax]                   // r9 = frame
+            | lea r9, [r10 + rax]
 
             #ifdef _WIN32
             | sub rsp, 32
-            | mov rcx, rbx                          // vm
-            | mov rdx, r9                           // frame
-            | mov64 r8, (uintptr_t)&bc->code[ip+1]  // ip
+            | mov rcx, rbx
+            | mov rdx, r9
+            | mov64 r8, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_load_upvalue_u8
             | call rax
             | add rsp, 32
@@ -1084,7 +1024,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             #ifdef _WIN32
             | sub rsp, 32
             | mov rcx, rbx
-            | mov rdx, r9                           // frame
+            | mov rdx, r9
             | mov64 r8, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_store_upvalue_u8
             | call rax
@@ -1107,13 +1047,13 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
-            | lea r9, [r10 + rax]                   // r9 = frame
+            | lea r9, [r10 + rax]
 
             #ifdef _WIN32
             | sub rsp, 32
-            | mov rcx, rbx                          // vm
-            | mov rdx, r9                           // frame
-            | mov64 r8, (uintptr_t)&bc->code[ip+1]  // ip
+            | mov rcx, rbx
+            | mov rdx, r9
+            | mov64 r8, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_array_new_u8
             | call rax
             | add rsp, 32
@@ -1132,12 +1072,12 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
         case OP_ARRAY_GET: {
             #ifdef _WIN32
             | sub rsp, 32
-            | mov rcx, rbx                          // ТОЛЬКО vm
+            | mov rcx, rbx
             | mov64 rax, (uintptr_t)vm_op_array_get
             | call rax
             | add rsp, 32
             #else
-            | mov rdi, rbx                          // ТОЛЬКО vm
+            | mov rdi, rbx
             | mov64 rax, (uintptr_t)vm_op_array_get
             | call rax
             #endif
@@ -1202,22 +1142,22 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             | mov r10, [rbx + VM_FRAMES_OFFSET]
             | mov eax, r9d
             | shl rax, 5
-            | lea r9, [r10 + rax]                   // r9 = frame
+            | lea r9, [r10 + rax]
 
             #ifdef _WIN32
             | sub rsp, 32
-            | mov rcx, rbx                          // vm
-            | mov64 rdx, (uintptr_t)bc              // bytecode
-            | mov r8, r9                            // frame
-            | mov64 r9, (uintptr_t)&bc->code[ip+1]  // ip (4th arg in r9)
+            | mov rcx, rbx
+            | mov64 rdx, (uintptr_t)bc
+            | mov r8, r9
+            | mov64 r9, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_new_closure
             | call rax
             | add rsp, 32
             #else
-            | mov rdi, rbx                          // vm
-            | mov64 rsi, (uintptr_t)bc              // bytecode
-            | mov rdx, r9                           // frame
-            | mov64 rcx, (uintptr_t)&bc->code[ip+1] // ip
+            | mov rdi, rbx
+            | mov64 rsi, (uintptr_t)bc
+            | mov rdx, r9
+            | mov64 rcx, (uintptr_t)&bc->code[ip+1]
             | mov64 rax, (uintptr_t)vm_op_new_closure
             | call rax
             #endif
@@ -1248,32 +1188,9 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
     | mov rdx, [rbx + VM_FRAMES_OFFSET]
     | mov eax, ecx
     | shl rax, 5
-    | add rdx, rax                              // rdx = current frame
+    | add rdx, rax
     | mov64 rax, (uintptr_t)(bc->code + fn->code_end)
-    | mov [rdx + FRAME_IP_OFFSET], rax          // frame->ip = end of function
-    | xor eax, eax                              // return 0 (success)
-    | jmp ->cleanup
-
-    // Global labels для RETURN
-    |->return_to_caller:
-    | mov eax, dword [rbx + VM_SP_OFFSET]
-    | mov rdx, [rbx + VM_STACK_OFFSET]
-    | lea rsi, [rdx + rax * 16]
-    | mov dword [rsi], r10d
-    | mov [rsi + 8], r11
-    | inc eax
-    | mov dword [rbx + VM_SP_OFFSET], eax
-    | xor eax, eax
-    | jmp ->cleanup
-
-    |->return_nil_to_caller:
-    | mov eax, dword [rbx + VM_SP_OFFSET]
-    | mov rdx, [rbx + VM_STACK_OFFSET]
-    | lea rsi, [rdx + rax * 16]
-    | mov dword [rsi], VAL_NIL
-    | mov qword [rsi + 8], 0
-    | inc eax
-    | mov dword [rbx + VM_SP_OFFSET], eax
+    | mov [rdx + FRAME_IP_OFFSET], rax
     | xor eax, eax
     | jmp ->cleanup
 
@@ -1301,7 +1218,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
     int err = dasm_link(Dst, &size);
     if (err != DASM_S_OK) {
-        fprintf(stderr, "[Codegen] dasm_link failed: %d\n", err);
+        if (debug) fprintf(stderr, "[Codegen] dasm_link failed: %d\n", err);
         free(insn_offsets);
         free(offset_to_index);
         return NULL;
@@ -1319,7 +1236,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
     code = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!code) {
-        fprintf(stderr, "[Codegen] VirtualAlloc failed: error=%lu\n", GetLastError());
+        if (debug) fprintf(stderr, "[Codegen] VirtualAlloc failed: error=%lu\n", GetLastError());
         free(insn_offsets);
         free(offset_to_index);
         return NULL;
@@ -1336,7 +1253,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
     code = mmap(NULL, size, PROT_READ | PROT_WRITE,
                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (code == MAP_FAILED) {
-        fprintf(stderr, "[Codegen] mmap failed: %s\n", strerror(errno));
+        if (debug) fprintf(stderr, "[Codegen] mmap failed: %s\n", strerror(errno));
         free(insn_offsets);
         free(offset_to_index);
         return NULL;
@@ -1364,7 +1281,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
     DWORD old;
     if (!VirtualProtect(code, size, PAGE_EXECUTE_READ, &old)) {
-        fprintf(stderr, "[Codegen] VirtualProtect failed: error=%lu\n", GetLastError());
+        if (debug) fprintf(stderr, "[Codegen] VirtualProtect failed: error=%lu\n", GetLastError());
         VirtualFree(code, 0, MEM_RELEASE);
         free(insn_offsets);
         free(offset_to_index);
@@ -1380,7 +1297,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
     }
 
     if (mprotect(code, size, PROT_READ | PROT_EXEC) != 0) {
-        fprintf(stderr, "[Codegen] mprotect failed: %s\n", strerror(errno));
+        if (debug) fprintf(stderr, "[Codegen] mprotect failed: %s\n", strerror(errno));
         munmap(code, size);
         free(insn_offsets);
         free(offset_to_index);
