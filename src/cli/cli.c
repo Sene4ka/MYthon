@@ -31,8 +31,8 @@ CLIArgs parse_args(int argc, char** argv) {
 
     args.jit_enabled = 0;
     args.jit_opt_level = 2;
-    args.jit_opt_threshold = 10;
-    args.jit_native_threshold = 50;
+    args.jit_opt_threshold = 5;
+    args.jit_native_threshold = 10;
     args.jit_stats = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -43,11 +43,6 @@ CLIArgs parse_args(int argc, char** argv) {
             }
             if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
                 args.mode = MODE_VERSION;
-                return args;
-            }
-            if (!strcmp(argv[i], "--repl")) {
-                args.mode = MODE_RUN;
-                args.input_file = NULL;
                 return args;
             }
             if (!strcmp(argv[i], "-c") || !strcmp(argv[i], "--compile")) {
@@ -145,7 +140,6 @@ void print_usage(void) {
     printf("Usage: mython [mode] [file] [options]\n");
     printf("\n");
     printf("Modes:\n");
-    printf("  --repl                    Start interactive REPL\n");
     printf("  -c, --compile <file>       Compile source to bytecode\n");
     printf("  -r, --exec <file>          Execute bytecode file\n");
     printf("  -D, --disassemble <file>   Disassemble bytecode file\n");
