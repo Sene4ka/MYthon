@@ -7,11 +7,11 @@ fn factorial(n) {
 
 fn factorial_float(n) {
     if (n <= 1) {
-        return 1.0
+        return 1
     }
-    return n * trunk(factorial(n - 1))
+    return n * factorial_float(n - 1)
 }
 
 print("Факториал 20:", factorial(20))
 print("Факториал 21:", factorial(21))
-print("Факториал 21.0:", factorial_float(21.0))
+print("Факториал 21.0:", factorial(21.0))
