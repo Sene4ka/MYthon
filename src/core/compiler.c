@@ -589,6 +589,9 @@ CompileResult compile_node(Compiler* compiler, const ASTNode* node, Bytecode* by
             compiler_debug_log(compiler, "  -> program");
             return compile_program(compiler, node, bytecode);
 
+        case NODE_POSTFIX_EXPR:
+            return compile_postfix(compiler, node, bytecode);
+
         default:
             compiler_debug_log(compiler, "  -> unsupported node type=%d", node->type);
             compiler_error_at_line(compiler, node->line, "Unsupported node type (yet)");
@@ -772,13 +775,105 @@ CompileResult compile_binary(Compiler* compiler, const ASTNode* node, Bytecode* 
 }
 
 CompileResult compile_postfix(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
-    (void)bytecode;
+    if (!node || node->type != NODE_POSTFIX_EXPR) {
+        compiler_error_at_line(compiler, node ? node->line : 0, "Expected postfix expression");
+        return COMPILE_ERROR;
+    }
 
-    compiler_debug_log(compiler, "compile_postfix: UNUSED helper called, line=%d type=%d",
-                       node ? (int)node->line : -1,
-                       node ? (int)node->type : -1);
+    compiler_debug_log(compiler, "compile_postfix: operator=%d line=%d",
+                       node->postfix.operator, node->line);
 
-    return COMPILE_ERROR;
+    Bytecode* bc = current_bc(compiler, bytecode);
+
+    if (node->postfix.operand->type != NODE_VARIABLE_EXPR) {
+        compiler_error_at_line(compiler, node->line, "Postfix operator requires variable");
+        return COMPILE_ERROR;
+    }
+
+    const ASTNode* var_node = node->postfix.operand;
+    const char* name = var_node->variable.name;
+    int length = (int)var_node->variable.name_length;
+
+    int local = compiler_resolve_local(compiler, name, length);
+    if (local >= 0) {
+        emit_op(compiler, bc, OP_LOAD_LOCAL_U8);
+        emit_u8(compiler, bc, (uint8_t)local);
+
+        emit_op(compiler, bc, OP_DUP);
+
+        int const_idx = compiler_add_const_int(bytecode, 1);
+        emit_op(compiler, bc, OP_LOAD_CONST_U16);
+        emit_u16(compiler, bc, (uint16_t)const_idx);
+
+        if (node->postfix.operator == TOKEN_PLUS_PLUS) {
+            emit_op(compiler, bc, OP_ADD);
+        } else {
+            emit_op(compiler, bc, OP_SUB);
+        }
+
+        emit_op(compiler, bc, OP_STORE_LOCAL_U8);
+        emit_u8(compiler, bc, (uint8_t)local);
+
+        return COMPILE_SUCCESS;
+    }
+
+    int up = compiler_resolve_upvalue(compiler, name, length);
+    if (up >= 0) {
+        emit_op(compiler, bc, OP_LOAD_UPVALUE_U8);
+        emit_u8(compiler, bc, (uint8_t)up);
+
+        emit_op(compiler, bc, OP_DUP);
+
+        int const_idx = compiler_add_const_int(bytecode, 1);
+        emit_op(compiler, bc, OP_LOAD_CONST_U16);
+        emit_u16(compiler, bc, (uint16_t)const_idx);
+
+        if (node->postfix.operator == TOKEN_PLUS_PLUS) {
+            emit_op(compiler, bc, OP_ADD);
+        } else {
+            emit_op(compiler, bc, OP_SUB);
+        }
+
+        emit_op(compiler, bc, OP_STORE_UPVALUE_U8);
+        emit_u8(compiler, bc, (uint8_t)up);
+
+        return COMPILE_SUCCESS;
+    }
+
+    char buf[256];
+    int name_len = length < (int)sizeof(buf)-1 ? length : (int)sizeof(buf)-1;
+    memcpy(buf, name, name_len);
+    buf[name_len] = '\0';
+
+    int global = compiler_resolve_global(compiler, bytecode, buf);
+    if (global < 0) {
+        int const_idx = compiler_add_const_int(bytecode, 0);
+        global = compiler_define_global(compiler, bytecode, buf, const_idx);
+        if (global < 0) {
+            compiler_error_at_line(compiler, node->line, "Failed to define global");
+            return COMPILE_ERROR;
+        }
+    }
+
+    emit_op(compiler, bc, OP_LOAD_GLOBAL_U16);
+    emit_u16(compiler, bc, (uint16_t)global);
+
+    emit_op(compiler, bc, OP_DUP);
+
+    int const_idx = compiler_add_const_int(bytecode, 1);
+    emit_op(compiler, bc, OP_LOAD_CONST_U16);
+    emit_u16(compiler, bc, (uint16_t)const_idx);
+
+    if (node->postfix.operator == TOKEN_PLUS_PLUS) {
+        emit_op(compiler, bc, OP_ADD);
+    } else {
+        emit_op(compiler, bc, OP_SUB);
+    }
+
+    emit_op(compiler, bc, OP_STORE_GLOBAL_U16);
+    emit_u16(compiler, bc, (uint16_t)global);
+
+    return COMPILE_SUCCESS;
 }
 
 CompileResult compile_literal(Compiler* compiler, const ASTNode* node, Bytecode* bytecode) {
