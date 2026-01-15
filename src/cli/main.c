@@ -37,7 +37,7 @@ int main(int argc, char *argv[]) {
             result = 1;
     }
 
-    printf("Finished with exit code %d\n", result);
+    if (result != 0) printf("Finished with exit code %d\n", result);
     fflush(stdout);
 
     free(args.input_file);

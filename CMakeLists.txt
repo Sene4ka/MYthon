@@ -67,7 +67,6 @@ set(SOURCE_FILES
         ${SRC_DIR}/runtime/native.c
         ${SRC_DIR}/runtime/jit.c
         ${SRC_DIR}/cli/cli.c
-        ${SRC_DIR}/core/debug.c
         ${SRC_DIR}/core/compiler.c
         ${SRC_DIR}/utils/utils.c
         ${SRC_DIR}/runtime/jit_vm_bridge.c
@@ -86,7 +85,6 @@ set(HEADER_FILES
         ${SRC_DIR}/runtime/native.h
         ${SRC_DIR}/runtime/jit.h
         ${SRC_DIR}/cli/cli.h
-        ${SRC_DIR}/core/debug.h
         ${SRC_DIR}/utils/utils.h
         ${SRC_DIR}/runtime/jit_vm_bridge.h
         ${SRC_DIR}/runtime/jit_codegen.h
