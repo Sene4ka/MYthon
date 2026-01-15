@@ -1029,15 +1029,8 @@ CompileResult compile_assign(Compiler* compiler, const ASTNode* node, Bytecode* 
         const char* name = target->variable.name;
         int length = (int)target->variable.name_length;
 
-        compiler_debug_log(compiler, "  assign to variable \"%.*s\"", length, name);
-
         int local = compiler_resolve_local(compiler, name, length);
         if (local >= 0) {
-            compiler_debug_log(compiler, "    -> local index=%d", local);
-            if (local > 0xFF) {
-                compiler_error_at_line(compiler, node->line, "Too many locals");
-                return COMPILE_ERROR;
-            }
             emit_op(compiler, bc, OP_STORE_LOCAL_U8);
             emit_u8(compiler, bc, (uint8_t)local);
             return COMPILE_SUCCESS;
@@ -1045,57 +1038,43 @@ CompileResult compile_assign(Compiler* compiler, const ASTNode* node, Bytecode* 
 
         int up = compiler_resolve_upvalue(compiler, name, length);
         if (up >= 0) {
-            compiler_debug_log(compiler, "    -> upvalue index=%d", up);
-            if (up > 0xFF) {
-                compiler_error_at_line(compiler, node->line, "Too many upvalues");
-                return COMPILE_ERROR;
-            }
             emit_op(compiler, bc, OP_STORE_UPVALUE_U8);
             emit_u8(compiler, bc, (uint8_t)up);
             return COMPILE_SUCCESS;
         }
 
-        FunctionState* fs = current_function_state(compiler);
-        if (fs && fs->scope_depth > 0) {
-            int local_idx = compiler_add_local(compiler, name, length);
-            if (local_idx < 0) {
-                compiler_error_at_line(compiler, node->line, "Failed to add local");
-                return COMPILE_ERROR;
-            }
-            if (local_idx > 0xFF) {
-                compiler_error_at_line(compiler, node->line, "Too many locals");
-                return COMPILE_ERROR;
-            }
-            emit_op(compiler, bc, OP_STORE_LOCAL_U8);
-            emit_u8(compiler, bc, (uint8_t)local_idx);
+        char buf[256];
+        int namelen = length < (int)sizeof(buf)-1 ? length : (int)sizeof(buf)-1;
+        memcpy(buf, name, namelen);
+        buf[namelen] = 0;
+
+        int global = compiler_resolve_global(compiler, bytecode, buf);
+        if (global >= 0) {
+            emit_op(compiler, bc, OP_STORE_GLOBAL_U16);
+            emit_u16(compiler, bc, (uint16_t)global);
             return COMPILE_SUCCESS;
         }
 
-
-        char buf[256];
-        int name_len = length < (int)sizeof(buf)-1 ? length : (int)sizeof(buf)-1;
-        memcpy(buf, name, name_len);
-        buf[name_len] = '\0';
-
-        compiler_debug_log(compiler, "    -> global lookup \"%s\"", buf);
-
-        int global = compiler_resolve_global(compiler, bytecode, buf);
-        if (global < 0) {
-            compiler_debug_log(compiler, "    -> define new global \"%s\"", buf);
-            int const_idx = -1;
-            global = compiler_define_global(compiler, bytecode, buf, const_idx);
-            if (global < 0) {
-                compiler_error_at_line(compiler, node->line, "Failed to define global");
+        FunctionState* fs = current_function_state(compiler);
+        if (fs && fs->scope_depth > 0) {
+            int localidx = compiler_add_local(compiler, name, length);
+            if (localidx < 0) {
+                compiler_error_at_line(compiler, node->line, "Failed to add local");
                 return COMPILE_ERROR;
             }
-        } else {
-            compiler_debug_log(compiler, "    -> existing global index=%d", global);
+            emit_op(compiler, bc, OP_STORE_LOCAL_U8);
+            emit_u8(compiler, bc, (uint8_t)localidx);
+            return COMPILE_SUCCESS;
         }
 
-        compiler_debug_log(compiler, "    -> emit STORE_GLOBAL index=%d", global);
-
+        global = compiler_define_global(compiler, bytecode, buf, -1);
+        if (global < 0) {
+            compiler_error_at_line(compiler, node->line, "Failed to define global");
+            return COMPILE_ERROR;
+        }
         emit_op(compiler, bc, OP_STORE_GLOBAL_U16);
         emit_u16(compiler, bc, (uint16_t)global);
+
         return COMPILE_SUCCESS;
     }
 
