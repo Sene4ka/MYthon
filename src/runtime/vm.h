@@ -69,7 +69,6 @@ typedef struct {
     int func_index;
 } FunctionObject;
 
-
 typedef struct Upvalue {
     Object obj;
     Value* location;
@@ -234,11 +233,15 @@ int vm_op_store_global_u16(VM* vm, CallFrame* frame, uint8_t* ip);
 
 int vm_op_print(VM* vm);
 
+int jit_handle_return(VM* vm, CallFrame* frame, uint8_t* ip);
+int jit_handle_return_nil(VM* vm, CallFrame* frame, uint8_t* ip);
+
 // Helpers
 void vm_push_frame(VM* vm, Bytecode* bytecode, int slot_count);
 void vm_push_frame_with_ip(VM* vm, Bytecode* bytecode, int slot_count, uint8_t* ip_start);
 void vm_push_frame_with_ip_at(VM* vm, Bytecode* bytecode, int slot_count, uint8_t* ip_start, int slots_offset);
 void vm_pop_frame(VM* vm);
+int value_to_bool(Value* value);
 
 Upvalue* vm_capture_upvalue(VM* vm, Value* slot);
 

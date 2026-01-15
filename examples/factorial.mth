@@ -6,5 +6,5 @@ fn factorial(n) {
 }
 
 result = factorial(15)
-print("Факториал 10:")
+print("Факториал 15:")
 print(result)
