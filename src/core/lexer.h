@@ -2,6 +2,7 @@
 #define MYTHON_LEXER_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 typedef enum {
     TOKEN_LEFT_PAREN,
@@ -97,7 +98,8 @@ Token lexer_next_token(Lexer* lexer);
 int lexer_has_errors(const Lexer* lexer);
 const char* token_type_to_string(TokenType type);
 char* token_copy_text(const Token* token);
-double token_as_number(const Token* token);
+int64_t token_as_int(const Token* token);
+double token_as_float(const Token* token);
 int token_is_keyword(const Token* token);
 void lexer_skip_comments(Lexer* lexer);
 

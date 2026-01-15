@@ -1,4 +1,7 @@
 #include "parser.h"
+
+#include <stdbool.h>
+
 #include "memory.h"
 #include <stdio.h>
 #include <string.h>
@@ -704,8 +707,23 @@ ASTNode* parse_primary(Parser* parser) {
         return ast_new_nil_literal(parser->previous.line, parser->previous.column);
     }
     if (parser_match(parser, TOKEN_NUMBER)) {
-        double value = token_as_number(&parser->previous);
-        return ast_new_number_literal(value, parser->previous.line, parser->previous.column);
+        const unsigned char* text = parser->previous.start;
+        size_t len = parser->previous.length;
+
+        bool is_float = false;
+        for (size_t i = 0; i < len; i++) {
+            if (text[i] == '.' || text[i] == 'e' || text[i] == 'E') {
+                is_float = true;
+                break;
+            }
+        }
+
+        if (is_float) {
+            double value = token_as_float(&parser->previous);
+            return ast_new_float_literal(value, parser->previous.line, parser->previous.column);
+        }
+        int64_t value = token_as_int(&parser->previous);
+        return ast_new_int_literal(value, parser->previous.line, parser->previous.column);
     }
     if (parser_match(parser, TOKEN_STRING)) {
         char* text = token_copy_text(&parser->previous);

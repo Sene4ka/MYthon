@@ -1,6 +1,8 @@
 #ifndef MYTHON_AST_H
 #define MYTHON_AST_H
 
+#include <stdint.h>
+
 #include "lexer.h"
 
 typedef enum {
@@ -64,13 +66,15 @@ struct ASTNode {
 
         struct {
             enum {
-                LIT_NUMBER,
+                LIT_INT,
+                LIT_FLOAT,
                 LIT_STRING,
                 LIT_BOOL,
                 LIT_NIL
             } value_type;
             union {
-                double number;
+                int64_t int_value;
+                double float_value;
                 char* string;
                 int boolean;
             } value;
@@ -163,7 +167,8 @@ ASTNode* ast_new_binary(ASTNode* left, ASTNode* right, TokenType operator, int l
 ASTNode* ast_new_ternary(ASTNode* condition, ASTNode* then_expr, ASTNode* else_expr, int line, int column);
 ASTNode* ast_new_unary(ASTNode* operand, TokenType operator, int line, int column);
 ASTNode* ast_new_postfix(ASTNode* operand, TokenType operator, int line, int column);
-ASTNode* ast_new_number_literal(double value, int line, int column);
+ASTNode* ast_new_int_literal(int64_t value, int line, int column);
+ASTNode* ast_new_float_literal(double value, int line, int column);
 ASTNode* ast_new_string_literal(const char* value, int line, int column);
 ASTNode* ast_new_bool_literal(int value, int line, int column);
 ASTNode* ast_new_nil_literal(int line, int column);

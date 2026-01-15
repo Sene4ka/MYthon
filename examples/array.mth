@@ -1,7 +1,7 @@
 fn test_array() {
     arr = []
     for (i = 0; i < 5; i++) {
-        arr.push(10 + 1.2001 + 1e-2 + random())
+        arr.push(1 + 1.0 + 1.2001 + 1e-2 + 5 * random())
     }
 
     for (i = 0; i < 5; i++) {
