@@ -17,6 +17,10 @@ static NativeInfo native_functions[] = {
     {"pop",     1, 6},
     {"random",  0, 7},
     {"floor",   1, 8},
+    {"ceil",    1, 9},
+    {"sqrt",    1, 10},
+    {"pow",     2, 11},
+    {"trunc",   1, 12},
     {NULL,      0, -1}
 };
 
@@ -56,6 +60,10 @@ void native_register_all(VM* vm) {
     vm_store_global(vm, 6, OBJECT_VAL(vm_new_native_function(vm, "pop",    native_array_pop,  1)));
     vm_store_global(vm, 7, OBJECT_VAL(vm_new_native_function(vm, "random", native_random,  0)));
     vm_store_global(vm, 8, OBJECT_VAL(vm_new_native_function(vm, "floor",  native_floor,   1)));
+    vm_store_global(vm, 9, OBJECT_VAL(vm_new_native_function(vm, "ceil",  native_ceil,    1)));
+    vm_store_global(vm, 10, OBJECT_VAL(vm_new_native_function(vm, "sqrt",   native_sqrt,    1)));
+    vm_store_global(vm, 11, OBJECT_VAL(vm_new_native_function(vm, "pow",   native_pow,     2)));
+    vm_store_global(vm, 12, OBJECT_VAL(vm_new_native_function(vm, "trunc", native_trunc,   1)));
 }
 
 
@@ -247,6 +255,95 @@ Value native_floor(VM* vm, int arg_count, Value* args) {
 
     if (IS_FLOAT(val)) {
         return INT_VAL((int64_t)floor(AS_FLOAT(val)));
+    }
+
+    return NIL_VAL;
+}
+
+Value native_ceil(VM* vm, int arg_count, Value* args) {
+    (void)vm;
+    if (arg_count != 1) {
+        return NIL_VAL;
+    }
+
+    Value val = args[0];
+
+    if (IS_INT(val)) {
+        return val;
+    }
+
+    if (IS_FLOAT(val)) {
+        return INT_VAL((int64_t)ceil(AS_FLOAT(val)));
+    }
+
+    return NIL_VAL;
+}
+
+Value native_sqrt(VM* vm, int arg_count, Value* args) {
+    (void)vm;
+    if (arg_count != 1) {
+        return NIL_VAL;
+    }
+
+    Value val = args[0];
+    double num;
+
+    if (IS_INT(val)) {
+        num = (double)AS_INT(val);
+    } else if (IS_FLOAT(val)) {
+        num = AS_FLOAT(val);
+    } else {
+        return NIL_VAL;
+    }
+
+    if (num < 0.0) {
+        return NIL_VAL;
+    }
+
+    return FLOAT_VAL(sqrt(num));
+}
+
+Value native_pow(VM* vm, int arg_count, Value* args) {
+    (void)vm;
+    if (arg_count != 2) {
+        return NIL_VAL;
+    }
+
+    double base, exponent;
+
+    if (IS_INT(args[0])) {
+        base = (double)AS_INT(args[0]);
+    } else if (IS_FLOAT(args[0])) {
+        base = AS_FLOAT(args[0]);
+    } else {
+        return NIL_VAL;
+    }
+
+    if (IS_INT(args[1])) {
+        exponent = (double)AS_INT(args[1]);
+    } else if (IS_FLOAT(args[1])) {
+        exponent = AS_FLOAT(args[1]);
+    } else {
+        return NIL_VAL;
+    }
+
+    return FLOAT_VAL(pow(base, exponent));
+}
+
+Value native_trunc(VM* vm, int arg_count, Value* args) {
+    (void)vm;
+    if (arg_count != 1) {
+        return NIL_VAL;
+    }
+
+    Value val = args[0];
+
+    if (IS_INT(val)) {
+        return FLOAT_VAL((double)AS_INT(val));
+    }
+
+    if (IS_FLOAT(val)) {
+        return FLOAT_VAL(trunc(AS_FLOAT(val)));
     }
 
     return NIL_VAL;

@@ -29,6 +29,10 @@ Value native_exit(VM* vm, int arg_count, Value* args);
 Value native_time(VM* vm, int arg_count, Value* args);
 Value native_random(VM* vm, int arg_count, Value* args);
 Value native_floor(VM* vm, int arg_count, Value* args);
+Value native_ceil(VM* vm, int arg_count, Value* args);
+Value native_sqrt(VM* vm, int arg_count, Value* args);
+Value native_pow(VM* vm, int arg_count, Value* args);
+Value native_trunc(VM* vm, int arg_count, Value* args);
 
 NativeFunctionObject* vm_new_native_function(
     VM* vm, const char* name, NativeFn function, int arity
