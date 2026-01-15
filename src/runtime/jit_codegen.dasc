@@ -122,29 +122,6 @@ do { \
 #define VAL_CLOSURE 8
 #define VAL_UPVALUE 9
 
-|.macro peek_stack, offset, type_reg, data_reg
-  | mov eax, dword [rbx + VM_SP_OFFSET]
-  | sub eax, offset
-  | dec eax
-  | mov rdx, [rbx + VM_STACK_OFFSET]
-  | lea rsi, [rdx + rax*16]
-  | mov type_reg, dword [rsi]
-  | mov data_reg, [rsi + VALUE_DATA_OFFSET]
-|.endmacro
-
-|.macro peek_stack_checked, offset, type_reg, data_reg, error_label
-  | mov eax, offset
-  | cmp eax, dword [rbx + VM_SP_OFFSET]
-  | jae error_label
-  | mov ecx, dword [rbx + VM_SP_OFFSET]
-  | sub ecx, eax
-  | dec ecx
-  | mov rdx, [rbx + VM_STACK_OFFSET]
-  | lea rsi, [rdx + rcx*16]
-  | mov type_reg, dword [rsi]
-  | mov data_reg, [rsi + VALUE_DATA_OFFSET]
-|.endmacro
-
 |.macro pop_stack, type_reg, data_reg
   | mov eax, dword [rbx + VM_SP_OFFSET]
   | dec eax
@@ -153,36 +130,6 @@ do { \
   | lea rsi, [rdx + rax*16]
   | mov type_reg, dword [rsi]
   | mov data_reg, [rsi + VALUE_DATA_OFFSET]
-|.endmacro
-
-|.macro push_stack_fast, type_reg, data_reg
-  | mov eax, dword [rbx + VM_SP_OFFSET]
-  | mov rdx, [rbx + VM_STACK_OFFSET]
-  | lea rsi, [rdx + rax*16]
-  | mov dword [rsi], type_reg
-  | mov [rsi + 8], data_reg
-  | inc eax
-  | mov [rbx + VM_SP_OFFSET], eax
-  | cmp eax, dword [rbx + VM_STACK_SIZE_OFFSET]
-  | jle >1
-  | mov dword [rbx + VM_STACK_SIZE_OFFSET], eax
-  |1:
-|.endmacro
-
-|.macro push_stack_checked, type_reg, data_reg, slow_label
-  | mov eax, dword [rbx + VM_SP_OFFSET]
-  | cmp eax, dword [rbx + VM_CAPACITY_OFFSET]
-  | jae slow_label
-  | mov rdx, [rbx + VM_STACK_OFFSET]
-  | lea rsi, [rdx + rax*16]
-  | mov dword [rsi], type_reg
-  | mov [rsi + VALUE_DATA_OFFSET], data_reg
-  | inc eax
-  | mov [rbx + VM_SP_OFFSET], eax
-  | cmp eax, dword [rbx + VM_STACK_SIZE_OFFSET]
-  | jle >1
-  | mov dword [rbx + VM_STACK_SIZE_OFFSET], eax
-  |1:
 |.endmacro
 
 |.macro value_to_bool, type_reg, data_reg, out_reg
@@ -440,8 +387,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
     | push r13
     | push r14
     | push r15
-    | and rsp, -16
-    | sub rsp, 64
+    | sub rsp, 72
     #ifdef _WIN32
     | mov rbx, rcx              // rbx = VM* (callee-saved, не нужно backup)
     #else
@@ -1337,8 +1283,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
 
     // Epilogue
     |->cleanup:
-    | add rsp, 64
-    | pop rbx
+    | add rsp, 72
     | pop r15
     | pop r14
     | pop r13
