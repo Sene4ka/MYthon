@@ -137,7 +137,7 @@ CLIArgs parse_args(int argc, char** argv) {
 }
 
 void print_usage(void) {
-    printf("Usage: mython [mode] [file] [options]\n");
+    printf("Usage: mython [options] [mode] [file]\n");
     printf("\n");
     printf("Modes:\n");
     printf("  -c, --compile <file>       Compile source to bytecode\n");
