@@ -1,0 +1,70 @@
+fn quicksort(arr, left, right) {
+    if (left >= right) {
+        return
+    }
+
+    mid = left + (right - left) / 2
+    pivot = arr[mid]
+    i = left
+    j = right
+
+    while (i <= j) {
+        while (arr[i] < pivot) {
+            i++
+        }
+        while (arr[j] > pivot) {
+            j--
+        }
+
+        if (i <= j) {
+            temp = arr[i]
+            arr[i] = arr[j]
+            arr[j] = temp
+            i++
+            j--
+        }
+    }
+
+    if (left < j) {
+        quicksort(arr, left, j)
+    }
+    if (i < right) {
+        quicksort(arr, i, right)
+    }
+}
+
+fn generate_array(n) {
+    arr = []
+    for (i = 0; i < n; i++) {
+        arr.push(random() * 100000)
+    }
+    return arr
+}
+
+fn test_quicksort() {
+    sizes = [100, 1000, 10000, 100000, 1000000, 10000000]
+
+    for (idx = 0; idx < len(sizes); idx++) {
+        size = sizes[idx]
+        print("Тест сортировки массива из", size, "элементов...");
+
+        arr = generate_array(size)
+
+        start = time()
+        quicksort(arr, 0, size - 1)
+        end = time()
+
+        print("Время:", end - start, "сек")
+
+        sorted = true
+        for (i = 1; i < size; i++) {
+            if (arr[i - 1] > arr[i]) {
+                sorted = false
+                break
+            }
+        }
+        print("Правильно отсортирован:", sorted ? "да" : "нет")
+    }
+}
+
+test_quicksort()

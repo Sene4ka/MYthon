@@ -1,0 +1,48 @@
+fn sieve_of_eratosthenes(limit) {
+    is_prime = []
+    for (i = 0; i <= limit; i++) {
+        is_prime.push(true)
+    }
+
+    is_prime[0] = false
+    is_prime[1] = false
+
+    for (i = 2; i * i <= limit; i++) {
+        if (is_prime[i]) {
+            for (j = i * i; j <= limit; j += i) {
+                is_prime[j] = false
+            }
+        }
+    }
+
+    primes = []
+    for (i = 2; i <= limit; i++) {
+        if (is_prime[i]) {
+            primes.push(i)
+        }
+    }
+
+    return primes
+}
+
+fn benchmark_sieve() {
+    limits = [100, 1000, 10000, 50000, 100000, 10000000]
+
+    for (idx = 0; idx < len(limits); idx++) {
+        limit = limits[idx]
+
+        start = time()
+        primes = sieve_of_eratosthenes(limit)
+        end = time()
+
+        print("Ищем простые числа до:", limit)
+        print("Найдено простых чисел:", len(primes))
+        print("Время выполнения:", end - start, "сек")
+
+        for (i = 0; i < 10; i++) {
+            print(primes[len(primes) - i - 1])
+        }
+    }
+}
+
+benchmark_sieve()

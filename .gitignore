@@ -1,0 +1,75 @@
+# JetBrains IDEs (CLion, IntelliJ IDEA)
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# CMake
+cmake-build-*/
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Testing/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+
+# Build directories
+build/
+out/
+bin/
+!*/bin/  # but keep source-controlled bin directories
+lib/
+!*/lib/  # but keep source-controlled lib directories
+
+# Compiled object files
+*.o
+*.ko
+*.obj
+*.elf
+*.cmth
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor temporary files
+*~
+*.swp
+*.swo
+
+# Project specific (example)
+*.log
+*.tmp
