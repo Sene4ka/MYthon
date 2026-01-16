@@ -78,7 +78,7 @@ void              jit_print_stats(JIT* jit);
 
 int jit_optimize_bytecode(JIT* jit, Bytecode* bc, uint32_t func_idx);
 int jit_bc_constant_folding(Bytecode* bc, uint32_t func_idx, int debug);
-//int jit_bc_peephole(Bytecode* bc, uint32_t func_idx, int debug);
-//int jit_bc_dead_code_elimination(Bytecode* bc, uint32_t func_idx, int debug);
+int jit_bc_peephole(Bytecode* bc, uint32_t func_idx, int debug);
+int jit_bc_dead_code_elimination(Bytecode* bc, uint32_t func_idx, int debug);
 
 #endif
