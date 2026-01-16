@@ -533,6 +533,8 @@ StringObject* vm_copy_string(VM* vm, const char* chars, int length) {
 
     link_object(vm, (Object*)str, VAL_STRING);
 
+    gc_check(vm);
+
     return str;
 }
 
@@ -551,6 +553,8 @@ StringObject* vm_take_string(VM* vm, char* chars, int length) {
 
     link_object(vm, (Object*)str, VAL_STRING);
 
+    gc_check(vm);
+
     return str;
 }
 
@@ -561,6 +565,8 @@ ArrayObject* vm_new_array(VM* vm, int capacity) {
     arr->capacity = capacity > 0 ? capacity : 0;
     arr->count = 0;
 
+    link_object(vm, (Object*)arr, VAL_ARRAY);
+
     if (arr->capacity > 0) {
         arr->items = (Value*)vm_realloc(
                 vm, NULL, 0, sizeof(Value) * (size_t)arr->capacity);
@@ -568,7 +574,7 @@ ArrayObject* vm_new_array(VM* vm, int capacity) {
         arr->items = NULL;
     }
 
-    link_object(vm, (Object*)arr, VAL_ARRAY);
+    gc_check(vm);
 
     return arr;
 }
@@ -609,6 +615,8 @@ NativeFunctionObject* vm_new_native_function(VM* vm, const char* name, NativeFn 
     memcpy(nf->name, name, (size_t)len + 1);
 
     link_object(vm, (Object*)nf, VAL_NATIVE_FN);
+
+    gc_check(vm);
 
     return nf;
 }
@@ -1661,8 +1669,8 @@ InterpretResult vm_run(VM* vm, Bytecode* bytecode) {
         main_meta->max_locals,
         main_meta->n_upvalues,
         bytecode,
-        0
-    );
+        0);
+
     ClosureObject* main_clo = vm_new_closure(vm, main_fn);
 
     vm_push_frame_with_ip(

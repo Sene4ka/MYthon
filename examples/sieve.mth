@@ -35,6 +35,7 @@ fn benchmark_sieve() {
         primes = sieve_of_eratosthenes(limit)
         end = time()
 
+        print("Ищем простые числа до:", limit)
         print("Найдено простых чисел:", len(primes))
         print("Время выполнения:", end - start, "сек")
 

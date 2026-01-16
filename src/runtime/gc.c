@@ -39,13 +39,9 @@ void gc_check(VM* vm) {
 
 void link_object(VM* vm, Object* obj, uint8_t type) {
     obj->type = type;
-    obj->marked = 1;
+    obj->marked = 1; // gc safe for 1 turn
     obj->next = vm->objects;
     vm->objects = obj;
-
-    gc_check(vm);
-
-    obj->marked = 0;
 }
 
 void mark_value(VM* vm, Value v) {
