@@ -192,7 +192,8 @@ CompilationTier jit_get_target_tier(JIT* jit, uint32_t func_idx) {
 
     if (hotness >= jit->native_threshold) {
         return TIER_NATIVE;
-    } else if (hotness >= jit->optimize_threshold) {
+    }
+    if (hotness >= jit->optimize_threshold) {
         return TIER_OPTIMIZED_BC;
     }
 
@@ -236,164 +237,306 @@ int jit_bc_constant_folding(Bytecode* bc, uint32_t func_idx, int debug) {
 
     uint32_t i = func->code_start;
     int patterns_found = 0;
+    int made_progress = 1;
 
-    while (i < func->code_end) {
-        if (i + 3 > func->code_end) {
-            if (debug) printf("[JIT Tier-1 OPT-CF END] Reached end of func @%u\n", i);
-            break;
-        }
+    while (made_progress) {
+        made_progress = 0;
+        i = func->code_start;
 
-        uint8_t op1 = bc->code[i];
-
-        if (op1 != OP_LOAD_CONST_U16) {
-            uint8_t oplen = opcode_operand_length[op1];
-            i += 1 + oplen;
-            continue;
-        }
-
-        uint16_t idx1 = (uint16_t)((bc->code[i + 1] << 8) | bc->code[i + 2]);
-
-        if (i + 3 > func->code_end || idx1 >= bc->const_count) {
-            i += 3;
-            continue;
-        }
-
-        uint8_t op2 = bc->code[i + 3];
-
-        if (op2 != OP_LOAD_CONST_U16) {
-            i += 3;
-            continue;
-        }
-
-        if (i + 6 > func->code_end) {
-            i += 3;
-            continue;
-        }
-
-        uint16_t idx2 = (uint16_t)((bc->code[i + 4] << 8) | bc->code[i + 5]);
-
-        if (idx2 >= bc->const_count) {
-            i += 3;
-            continue;
-        }
-
-        if (i + 7 > func->code_end) {
-            i += 3;
-            continue;
-        }
-
-        uint8_t op3 = bc->code[i + 6];
-
-        patterns_found++;
-        if (debug) {
-            printf("[JIT Tier-1 OPT-CF PATTERN FOUND] @%u: LOAD_CONST[%u]=%lld; LOAD_CONST[%u]=%lld; %s\n",
-                   i, idx1, bc->constants[idx1].int_val,
-                   idx2, bc->constants[idx2].int_val,
-                   op3 == OP_ADD ? "ADD" :
-                   op3 == OP_SUB ? "SUB" :
-                   op3 == OP_MUL ? "MUL" :
-                   op3 == OP_DIV ? "DIV" : "MOD");
-        }
-
-        if (bc->constants[idx1].type != CONST_INT ||
-            bc->constants[idx2].type != CONST_INT) {
-            i += 3;
-            continue;
-        }
-
-        int64_t val1 = bc->constants[idx1].int_val;
-        int64_t val2 = bc->constants[idx2].int_val;
-        int64_t result = 0;
-        int can_fold = 0;
-
-        switch (op3) {
-            case OP_ADD:
-                result = val1 + val2;
-                can_fold = 1;
+        while (i < func->code_end) {
+            if (i + 1 > func->code_end) {
                 break;
-            case OP_SUB:
-                result = val1 - val2;
-                can_fold = 1;
-                break;
-            case OP_MUL:
-                result = val1 * val2;
-                can_fold = 1;
-                break;
-            case OP_DIV:
-                if (val2 != 0) {
-                    result = val1 / val2;
-                    can_fold = 1;
-                }
-                break;
-            case OP_MOD:
-                if (val2 != 0) {
-                    result = val1 % val2;
-                    can_fold = 1;
-                }
-                break;
-            default:
-                can_fold = 0;
-        }
+            }
 
-        if (!can_fold) {
-            if (debug) printf("[JIT Tier-1 OPT-CF SKIP] Cannot fold op %u\n", op3);
-            i += 3;
-            continue;
-        }
+            uint8_t op1 = bc->code[i];
+            uint8_t oplen1 = opcode_operand_length[op1];
 
-        uint16_t result_idx = bc->const_count;
+            if (i + 1 + oplen1 > func->code_end) {
+                i += 1 + oplen1;
+                continue;
+            }
 
-        if (debug) {
-            printf("[JIT Tier-1 OPT-CF FOLD] %lld %s %lld = %lld → new const #%u\n",
-                   val1, op3 == OP_ADD ? "+" : "-", val2, result, result_idx);
-        }
+            if (op1 != OP_LOAD_CONST_U16) {
+                i += 1 + oplen1;
+                continue;
+            }
 
-        if (bc->const_count >= bc->const_capacity) {
-            size_t new_cap = bc->const_capacity == 0 ? 16 : bc->const_capacity * 2;
-            Constant* new_consts = (Constant*)realloc(bc->constants,
-                                                      new_cap * sizeof(Constant));
-            if (!new_consts) {
-                if (debug) printf("[JIT Tier-1 OPT-CF FAIL] Cannot allocate new const");
+            uint16_t idx1 = (uint16_t)((bc->code[i + 1] << 8) | bc->code[i + 2]);
+
+            if (idx1 >= bc->const_count) {
                 i += 3;
                 continue;
             }
 
-            bc->constants = new_consts;
-            bc->const_capacity = new_cap;
+            if (i + 1 + oplen1 + 1 > func->code_end) {
+                i += 3;
+                continue;
+            }
+
+            uint8_t op2 = bc->code[i + 1 + oplen1];
+            uint8_t oplen2 = opcode_operand_length[op2];
+
+            if (i + 1 + oplen1 + 1 + oplen2 > func->code_end) {
+                i += 3;
+                continue;
+            }
+
+            if (op2 != OP_LOAD_CONST_U16) {
+                i += 1 + oplen1 + 1 + oplen2;
+                continue;
+            }
+
+            uint16_t idx2 = (uint16_t)((bc->code[i + 1 + oplen1 + 1] << 8) |
+                                     bc->code[i + 1 + oplen1 + 2]);
+
+            if (idx2 >= bc->const_count) {
+                i += 3;
+                continue;
+            }
+
+            if (i + 1 + oplen1 + 1 + oplen2 + 1 > func->code_end) {
+                i += 3;
+                continue;
+            }
+
+            uint8_t op3 = bc->code[i + 1 + oplen1 + 1 + oplen2];
+
+            patterns_found++;
+            if (debug) {
+                printf("[JIT Tier-1 OPT-CF PATTERN FOUND] @%u: LOAD_CONST[%u]=%lld; LOAD_CONST[%u]=%lld; %s\n",
+                       i, idx1, bc->constants[idx1].int_val,
+                       idx2, bc->constants[idx2].int_val,
+                       op3 == OP_ADD ? "ADD" :
+                       op3 == OP_SUB ? "SUB" :
+                       op3 == OP_MUL ? "MUL" :
+                       op3 == OP_DIV ? "DIV" : "MOD");
+            }
+
+            if (bc->constants[idx1].type != CONST_INT ||
+                bc->constants[idx2].type != CONST_INT) {
+                i += 3;
+                continue;
+            }
+
+            int64_t val1 = bc->constants[idx1].int_val;
+            int64_t val2 = bc->constants[idx2].int_val;
+            int64_t result = 0;
+            int can_fold = 0;
+
+            switch (op3) {
+                case OP_ADD:
+                    result = val1 + val2;
+                    can_fold = 1;
+                    break;
+                case OP_SUB:
+                    result = val1 - val2;
+                    can_fold = 1;
+                    break;
+                case OP_MUL:
+                    result = val1 * val2;
+                    can_fold = 1;
+                    break;
+                case OP_DIV:
+                    if (val2 != 0) {
+                        result = val1 / val2;
+                        can_fold = 1;
+                    }
+                    break;
+                case OP_MOD:
+                    if (val2 != 0) {
+                        result = val1 % val2;
+                        can_fold = 1;
+                    }
+                    break;
+                default:
+                    can_fold = 0;
+            }
+
+            if (!can_fold) {
+                if (debug) printf("[JIT Tier-1 OPT-CF SKIP] Cannot fold op %u\n", op3);
+                i += 3;
+                continue;
+            }
+
+            uint16_t result_idx = bc->const_count;
+
+            if (debug) {
+                printf("[JIT Tier-1 OPT-CF APPLY] %lld %s %lld = %lld → new const #%u\n",
+                       val1,
+                       op3 == OP_ADD ? "+" :
+                       op3 == OP_SUB ? "-" :
+                       op3 == OP_MUL ? "*" :
+                       op3 == OP_DIV ? "/" : "%",
+                       val2, result, result_idx);
+            }
+
+            if (bc->const_count >= bc->const_capacity) {
+                size_t new_cap = bc->const_capacity == 0 ? 16 : bc->const_capacity * 2;
+                Constant* new_consts = (Constant*)realloc(bc->constants,
+                                                          new_cap * sizeof(Constant));
+                if (!new_consts) {
+                    if (debug) printf("[JIT Tier-1 OPT-CF FAIL] Cannot allocate new const");
+                    i += 3;
+                    continue;
+                }
+
+                bc->constants = new_consts;
+                bc->const_capacity = new_cap;
+            }
+
+            bc->constants[bc->const_count].type = CONST_INT;
+            bc->constants[bc->const_count].int_val = result;
+            bc->const_count++;
+
+            bc->code[i] = OP_LOAD_CONST_U16;
+            bc->code[i + 1] = (uint8_t)((result_idx >> 8) & 0xFF);
+            bc->code[i + 2] = (uint8_t)(result_idx & 0xFF);
+
+            bc_remove_bytes(bc, func_idx, i + 3, 4);
+
+            folded++;
+            made_progress = 1;
+
+            if (debug) printf("[JIT Tier-1 OPT-CF SUCCESS] Now folded: %d\n", folded);
+            break;
         }
+    }
 
-        bc->constants[bc->const_count].type = CONST_INT;
-        bc->constants[bc->const_count].int_val = result;
-        bc->const_count++;
-
-        bc->code[i] = OP_LOAD_CONST_U16;
-        bc->code[i + 1] = (uint8_t)((result_idx >> 8) & 0xFF);
-        bc->code[i + 2] = (uint8_t)(result_idx & 0xFF);
-
-        bc_remove_bytes(bc, func_idx, i + 3, 4);
-
-        bc_fix_jumps(bc, func_idx, 0);
-
-        folded++;
-
-        if (debug) printf("[JIT Tier-1 OPT-CF SUCCESS] Now folded: %d\n", folded);
+    if (debug) {
+        printf("[JIT Tier-1 OPT-CF FINISH] Performed %d constant folding optimizations in func %u\n",
+                   folded, func_idx);
     }
 
     return folded;
 }
 
+int jit_bc_peephole(Bytecode* bc, uint32_t func_idx, int debug) {
+    int optimized = 0;
+    Function* func = &bc->functions[func_idx];
+
+    if (debug) {
+        printf("[JIT Tier-1 OPT-PP] Peephole optimizing func %u '%s' [%u..%u) size=%u\n",
+               func_idx, func->name ? func->name : "<anon>",
+               func->code_start, func->code_end, func->code_end - func->code_start);
+    }
+
+    uint32_t i = func->code_start;
+    int made_progress = 1;
+
+    while (made_progress) {
+        made_progress = 0;
+        i = func->code_start;
+
+        while (i < func->code_end) {
+            if (i + 1 > func->code_end) break;
+
+            uint8_t op1 = bc->code[i];
+            uint8_t oplen1 = opcode_operand_length[op1];
+
+            if (i + 1 + oplen1 > func->code_end) {
+                i += 1 + oplen1;
+                continue;
+            }
+
+            if (op1 == OP_DUP) {
+                if (i + 1 + oplen1 + 1 <= func->code_end) {
+                    uint8_t op2 = bc->code[i + 1 + oplen1];
+                    uint8_t oplen2 = opcode_operand_length[op2];
+
+                    if (i + 1 + oplen1 + 1 + oplen2 <= func->code_end) {
+                        if (op2 == OP_POP) {
+                            if (debug) {
+                                printf("[JIT Tier-1 OPT-PP PATTERN FOUND] @%u: DUP; POP → remove both\n", i);
+                                printf("[JIT Tier-1 OPT-PP APPLY] Removing DUP; POP sequence at @%u\n", i);
+                            }
+
+                            bc_remove_bytes(bc, func_idx, i, 2 + oplen1 + oplen2);
+                            optimized++;
+                            made_progress = 1;
+
+                            if (debug) printf("[JIT Tier-1 OPT-PP SUCCESS] Now optimized: %d\n", optimized);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (op1 == OP_NEG) {
+                if (i + 1 + oplen1 + 1 <= func->code_end) {
+                    uint8_t op2 = bc->code[i + 1 + oplen1];
+                    uint8_t oplen2 = opcode_operand_length[op2];
+
+                    if (i + 1 + oplen1 + 1 + oplen2 <= func->code_end) {
+                        if (op2 == OP_NEG) {
+                            if (debug) {
+                                printf("[JIT Tier-1 OPT-PP PATTERN FOUND] @%u: NEG; NEG → remove both\n", i);
+                                printf("[JIT Tier-1 OPT-PP APPLY] Removing double negation at @%u\n", i);
+                            }
+
+                            bc_remove_bytes(bc, func_idx, i, 2 + oplen1 + oplen2);
+                            optimized++;
+                            made_progress = 1;
+
+                            if (debug) printf("[JIT Tier-1 OPT-PP SUCCESS] Now optimized: %d\n", optimized);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (op1 == OP_NOT) {
+                if (i + 1 + oplen1 + 1 <= func->code_end) {
+                    uint8_t op2 = bc->code[i + 1 + oplen1];
+                    uint8_t oplen2 = opcode_operand_length[op2];
+
+                    if (i + 1 + oplen1 + 1 + oplen2 <= func->code_end) {
+                        if (op2 == OP_NOT) {
+                            if (debug) {
+                                printf("[JIT Tier-1 OPT-PP PATTERN FOUND] @%u: NOT; NOT → remove both\n", i);
+                                printf("[JIT Tier-1 OPT-PP APPLY] Removing double NOT at @%u\n", i);
+                            }
+
+                            bc_remove_bytes(bc, func_idx, i, 2);
+                            optimized++;
+                            made_progress = 1;
+
+                            if (debug) printf("[JIT Tier-1 OPT-PP SUCCESS] Now optimized: %d\n", optimized);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            i += 1 + oplen1;
+        }
+    }
+
+    if (debug) {
+        printf("[JIT Tier-1 OPT-PP FINISH] Performed %d peephole optimizations in func %u\n",
+               optimized, func_idx);
+    }
+
+    return optimized;
+}
+
 int jit_optimize_bytecode(JIT* jit, Bytecode* bc, uint32_t func_idx) {
     if (!jit || !bc || func_idx >= bc->func_count) return 0;
+
+    if (jit->debug) {
+        printf("[JIT Tier-1 OPT] Optimizing function %u:",
+               func_idx);
+    }
 
     int total_opts = 0;
     int passes = 0;
     const int max_passes = 3;
 
-
     while (passes < max_passes) {
         int pass_opts = 0;
 
         pass_opts += jit_bc_constant_folding(bc, func_idx, jit->debug);
+
+        pass_opts += jit_bc_peephole(bc, func_idx, jit->debug);
 
         total_opts += pass_opts;
         passes++;
@@ -474,9 +617,34 @@ void* jit_compile_or_promote(JIT* jit, Bytecode* bc, uint32_t func_idx) {
         return NULL;
     }
 
-    // Tier-2: Compile to native
     if (target == TIER_NATIVE &&
         (!cf || cf->tier < TIER_NATIVE)) {
+        // If we haven't optimized the bytecode yet (Tier 1), do that first
+        if (!cf || cf->tier < TIER_OPTIMIZED_BC) {
+            if (jit->debug) {
+                printf("[JIT Tier-1] Optimizing bytecode for '%s' (hotness=%llu) before native compilation\n",
+                       func->name ? func->name : "",
+                       (unsigned long long)jit->hotness_counters[func_idx]);
+            }
+
+            int optimizations = jit_optimize_bytecode(jit, bc, func_idx);
+
+            if (jit->debug) {
+                printf("[JIT Tier-1] Applied %d optimizations\n", optimizations);
+            }
+
+            cf = ensure_compiled_entry(jit, func_idx);
+            if (!cf) return NULL;
+
+            cf->tier = TIER_OPTIMIZED_BC;
+            cf->optimized_bc.original_code_start = func->code_start;
+            cf->optimized_bc.original_code_end = func->code_end;
+            cf->code_size = func->code_end - func->code_start;
+            cf->promotion_count = jit->hotness_counters[func_idx];
+
+            jit->total_optimized++;
+        }
+
         cf = ensure_compiled_entry(jit, func_idx);
         if (!cf) return NULL;
 

@@ -32,7 +32,7 @@ CLIArgs parse_args(int argc, char** argv) {
     args.jit_enabled = 1;
     args.jit_opt_level = 2;
     args.jit_opt_threshold = 10;
-    args.jit_native_threshold = 10;
+    args.jit_native_threshold = 50;
     args.jit_stats = 0;
 
     for (int i = 1; i < argc; i++) {
