@@ -619,7 +619,6 @@ void* jit_compile_or_promote(JIT* jit, Bytecode* bc, uint32_t func_idx) {
 
     if (target == TIER_NATIVE &&
         (!cf || cf->tier < TIER_NATIVE)) {
-        // If we haven't optimized the bytecode yet (Tier 1), do that first
         if (!cf || cf->tier < TIER_OPTIMIZED_BC) {
             if (jit->debug) {
                 printf("[JIT Tier-1] Optimizing bytecode for '%s' (hotness=%llu) before native compilation\n",
