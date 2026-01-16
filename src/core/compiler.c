@@ -799,8 +799,6 @@ CompileResult compile_postfix(Compiler* compiler, const ASTNode* node, Bytecode*
         emit_op(compiler, bc, OP_LOAD_LOCAL_U8);
         emit_u8(compiler, bc, (uint8_t)local);
 
-        emit_op(compiler, bc, OP_DUP);
-
         int const_idx = compiler_add_const_int(bytecode, 1);
         emit_op(compiler, bc, OP_LOAD_CONST_U16);
         emit_u16(compiler, bc, (uint16_t)const_idx);
@@ -821,8 +819,6 @@ CompileResult compile_postfix(Compiler* compiler, const ASTNode* node, Bytecode*
     if (up >= 0) {
         emit_op(compiler, bc, OP_LOAD_UPVALUE_U8);
         emit_u8(compiler, bc, (uint8_t)up);
-
-        emit_op(compiler, bc, OP_DUP);
 
         int const_idx = compiler_add_const_int(bytecode, 1);
         emit_op(compiler, bc, OP_LOAD_CONST_U16);
@@ -857,8 +853,6 @@ CompileResult compile_postfix(Compiler* compiler, const ASTNode* node, Bytecode*
 
     emit_op(compiler, bc, OP_LOAD_GLOBAL_U16);
     emit_u16(compiler, bc, (uint16_t)global);
-
-    emit_op(compiler, bc, OP_DUP);
 
     int const_idx = compiler_add_const_int(bytecode, 1);
     emit_op(compiler, bc, OP_LOAD_CONST_U16);

@@ -34,7 +34,7 @@ do { \
         while (_sz < _need) _sz += _sz; \
         void* _new = realloc((p), _sz); \
         if (!_new) { \
-            fprintf(stderr, "DynASM allocation failed\n"); \
+            printf( "DynASM allocation failed\n"); \
             abort(); \
         } \
         (p) = (t*)_new; \
@@ -137,45 +137,45 @@ struct JitCodegen {
 JitCodegen* jit_codegen_new(int debug) {
     JitCodegen* cg = malloc(sizeof(JitCodegen));
     if (!cg) {
-        if (debug) fprintf(stderr, "[CODEGEN-NEW] malloc failed for JitCodegen\n");
+        if (debug) printf( "[CODEGEN-NEW] malloc failed for JitCodegen\n");
         return NULL;
     }
 
-    if (debug) fprintf(stderr, "[CODEGEN-NEW] Allocated JitCodegen at %p\n", (void*)cg);
+    if (debug) printf( "[CODEGEN-NEW] Allocated JitCodegen at %p\n", (void*)cg);
 
     // Allocate labels array for DynASM globals
     cg->labels = (void**)calloc(lbl__MAX, sizeof(void*));
     if (!cg->labels) {
-        if (debug) fprintf(stderr, "[CODEGEN-NEW] calloc failed for labels\n");
+        if (debug) printf( "[CODEGEN-NEW] calloc failed for labels\n");
         free(cg);
         return NULL;
     }
 
-    if (debug) fprintf(stderr, "[CODEGEN-NEW] Allocated labels at %p\n", (void*)cg->labels);
+    if (debug) printf( "[CODEGEN-NEW] Allocated labels at %p\n", (void*)cg->labels);
 
     // Initialize DynASM
     cg->d = NULL;
     dasm_State** Dst = &cg->d;
 
-    if (debug) fprintf(stderr, "[CODEGEN-NEW] Calling dasm_init...\n");
+    if (debug) printf( "[CODEGEN-NEW] Calling dasm_init...\n");
     dasm_init(Dst, DASM_MAXSECTION);
 
     if (!cg->d) {
-        if (debug) fprintf(stderr, "[CODEGEN-NEW] dasm_init failed!\n");
+        if (debug) printf( "[CODEGEN-NEW] dasm_init failed!\n");
         free(cg->labels);
         free(cg);
         return NULL;
     }
 
-    if (debug) fprintf(stderr, "[CODEGEN-NEW] dasm_init OK, d=%p\n", (void*)cg->d);
+    if (debug) printf( "[CODEGEN-NEW] dasm_init OK, d=%p\n", (void*)cg->d);
 
-    if (debug) fprintf(stderr, "[CODEGEN-NEW] Calling dasm_setupglobal...\n");
+    if (debug) printf( "[CODEGEN-NEW] Calling dasm_setupglobal...\n");
     dasm_setupglobal(Dst, cg->labels, lbl__MAX);
 
-    if (debug) fprintf(stderr, "[CODEGEN-NEW] Calling dasm_setup...\n");
+    if (debug) printf( "[CODEGEN-NEW] Calling dasm_setup...\n");
     dasm_setup(Dst, actions);
 
-    if (debug) fprintf(stderr, "[CODEGEN-NEW] Success!\n");
+    if (debug) printf( "[CODEGEN-NEW] Success!\n");
 
     cg->code_ptr = NULL;
     cg->code_size = 0;
@@ -281,7 +281,7 @@ static void mark_jump_labels(JitCodegen* cg, Bytecode* bc, uint32_t func_idx,
             if (target >= start && target < end) {
                 int idx = offset_to_index[target - start];
                 if (idx >= 0 && add_label(cg, (size_t)idx) != 0 && debug) {
-                    fprintf(stderr, "[Codegen] Failed to add label for %d\n", idx);
+                    printf( "[Codegen] Failed to add label for %d\n", idx);
                 }
             }
         }
@@ -792,12 +792,12 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             if (target >= fn->code_end) {
                 | jmp ->cleanup
             } else if (target < fn->code_start) {
-                if (debug) fprintf(stderr, "[Codegen] ERROR: JUMP target before start\n");
+                if (debug) printf( "[Codegen] ERROR: JUMP target before start\n");
                 return NULL;
             } else {
                 int t_index = offset_to_index[target - fn->code_start];
                 if (t_index < 0) {
-                    if (debug) fprintf(stderr, "[Codegen] ERROR: JUMP target=%u not found in insn_map\n", target);
+                    if (debug) printf( "[Codegen] ERROR: JUMP target=%u not found in insn_map\n", target);
                     return NULL;
                 }
                 | jmp =>(t_index)
@@ -827,12 +827,12 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
             if (target >= fn->code_end) {
                 | jz ->cleanup
             } else if (target < fn->code_start) {
-                if (debug) fprintf(stderr, "[Codegen] ERROR: JUMP_IF_FALSE target before start\n");
+                if (debug) printf( "[Codegen] ERROR: JUMP_IF_FALSE target before start\n");
                 return NULL;
             } else {
                 int t_index = offset_to_index[target - fn->code_start];
                 if (t_index < 0) {
-                    if (debug) fprintf(stderr, "[Codegen] ERROR: JUMP_IF_FALSE target=%u not found in insn_map\n", target);
+                    if (debug) printf( "[Codegen] ERROR: JUMP_IF_FALSE target=%u not found in insn_map\n", target);
                     return NULL;
                 }
                 | jz =>(t_index)
@@ -1213,75 +1213,75 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
     size_t size = 0;
 
     if (debug) {
-        fprintf(stderr, "[Codegen] Calling dasm_link...\n");
+        printf( "[Codegen] Calling dasm_link...\n");
     }
 
     int err = dasm_link(Dst, &size);
     if (err != DASM_S_OK) {
-        if (debug) fprintf(stderr, "[Codegen] dasm_link failed: %d\n", err);
+        if (debug) printf( "[Codegen] dasm_link failed: %d\n", err);
         free(insn_offsets);
         free(offset_to_index);
         return NULL;
     }
 
     if (debug) {
-        fprintf(stderr, "[Codegen] dasm_link OK, size=%zu\n", size);
+        printf( "[Codegen] dasm_link OK, size=%zu\n", size);
     }
 
     void* code = NULL;
     #ifdef _WIN32
     if (debug) {
-        fprintf(stderr, "[Codegen] Calling VirtualAlloc (size=%zu)...\n", size);
+        printf( "[Codegen] Calling VirtualAlloc (size=%zu)...\n", size);
     }
 
     code = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!code) {
-        if (debug) fprintf(stderr, "[Codegen] VirtualAlloc failed: error=%lu\n", GetLastError());
+        if (debug) printf( "[Codegen] VirtualAlloc failed: error=%lu\n", GetLastError());
         free(insn_offsets);
         free(offset_to_index);
         return NULL;
     }
 
     if (debug) {
-        fprintf(stderr, "[Codegen] VirtualAlloc OK, code=%p\n", code);
+        printf( "[Codegen] VirtualAlloc OK, code=%p\n", code);
     }
     #else
     if (debug) {
-        fprintf(stderr, "[Codegen] Calling mmap (size=%zu)...\n", size);
+        printf( "[Codegen] Calling mmap (size=%zu)...\n", size);
     }
 
     code = mmap(NULL, size, PROT_READ | PROT_WRITE,
                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (code == MAP_FAILED) {
-        if (debug) fprintf(stderr, "[Codegen] mmap failed: %s\n", strerror(errno));
+        if (debug) printf( "[Codegen] mmap failed: %s\n", strerror(errno));
         free(insn_offsets);
         free(offset_to_index);
         return NULL;
     }
 
     if (debug) {
-        fprintf(stderr, "[Codegen] mmap OK, code=%p\n", code);
+        printf( "[Codegen] mmap OK, code=%p\n", code);
     }
     #endif
 
     if (debug) {
-        fprintf(stderr, "[Codegen] Calling dasm_encode...\n");
+        printf( "[Codegen] Calling dasm_encode...\n");
     }
 
     dasm_encode(Dst, code);
 
     if (debug) {
-        fprintf(stderr, "[Codegen] dasm_encode OK\n");
+        printf( "[Codegen] dasm_encode OK\n");
     }
 
     #ifdef _WIN32
     if (debug) {
-        fprintf(stderr, "[Codegen] Calling VirtualProtect...\n");
+        printf( "[Codegen] Calling VirtualProtect...\n");
     }
 
     DWORD old;
     if (!VirtualProtect(code, size, PAGE_EXECUTE_READ, &old)) {
-        if (debug) fprintf(stderr, "[Codegen] VirtualProtect failed: error=%lu\n", GetLastError());
+        if (debug) printf( "[Codegen] VirtualProtect failed: error=%lu\n", GetLastError());
         VirtualFree(code, 0, MEM_RELEASE);
         free(insn_offsets);
         free(offset_to_index);
@@ -1289,15 +1289,15 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
     }
 
     if (debug) {
-        fprintf(stderr, "[Codegen] VirtualProtect OK\n");
+        printf( "[Codegen] VirtualProtect OK\n");
     }
     #else
     if (debug) {
-        fprintf(stderr, "[Codegen] Calling mprotect...\n");
+        printf( "[Codegen] Calling mprotect...\n");
     }
 
     if (mprotect(code, size, PROT_READ | PROT_EXEC) != 0) {
-        if (debug) fprintf(stderr, "[Codegen] mprotect failed: %s\n", strerror(errno));
+        if (debug) printf( "[Codegen] mprotect failed: %s\n", strerror(errno));
         munmap(code, size);
         free(insn_offsets);
         free(offset_to_index);
@@ -1305,7 +1305,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
     }
 
     if (debug) {
-        fprintf(stderr, "[Codegen] mprotect OK\n");
+        printf( "[Codegen] mprotect OK\n");
     }
     #endif
 
@@ -1314,7 +1314,7 @@ JitNativeFunc jit_compile_function(JitCodegen* cg,
     free(offset_to_index);
 
     if (debug) {
-        fprintf(stderr, "[Codegen] SUCCESS! Generated %zu bytes at %p\n", size, code);
+        printf( "[Codegen] SUCCESS! Generated %zu bytes at %p\n", size, code);
     }
 
     return (JitNativeFunc)(uintptr_t)code;
