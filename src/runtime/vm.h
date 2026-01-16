@@ -186,7 +186,6 @@ Value vm_pop(VM* vm);
 Value vm_peek(VM* vm, int distance);
 
 // VM Operation handlers
-
 int vm_op_add(VM* vm);
 int vm_op_sub(VM* vm);
 int vm_op_mul(VM* vm);
@@ -251,7 +250,6 @@ Value vm_load_global(VM* vm, int index);
 void vm_store_local(VM* vm, int index, Value value);
 Value vm_load_local(VM* vm, int index);
 
-Value vm_call_value(VM* vm, Value callee, int arg_count);
 Value vm_call_native(VM* vm, NativeFn function, int arg_count);
 
 void vm_runtime_error(VM* vm, const char* format, ...);
@@ -283,13 +281,5 @@ ClosureObject* vm_new_closure(VM* vm, FunctionObject* function);
 void vm_close_upvalues(VM* vm, Value* last);
 
 uint16_t read_u16(uint8_t* ip);
-
-Value* vm_get_global(VM* vm, uint16_t index);
-void vm_set_global(VM* vm, uint16_t index, Value* value);
-int vm_call_function(VM* vm, int arg_count);
-void vm_print(VM* vm);
-int vm_array_get(VM* vm);
-int vm_array_set(VM* vm);
-int vm_array_len(VM* vm);
 
 #endif

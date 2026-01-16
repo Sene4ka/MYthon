@@ -71,7 +71,7 @@ CLIArgs parse_args(int argc, char** argv) {
             else if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--debug")) {
                 args.debug_parse = 1;
                 args.debug_compile = 1;
-                args.debug_vm = 1;
+                //args.debug_vm = 1;
                 args.debug_gc = 1;
                 args.debug_jit = 1;
             }
@@ -81,9 +81,9 @@ CLIArgs parse_args(int argc, char** argv) {
             else if (!strcmp(argv[i], "--debug-compile")) {
                 args.debug_compile = 1;
             }
-            else if (!strcmp(argv[i], "--debug-vm")) {
+            /*else if (!strcmp(argv[i], "--debug-vm")) {
                 args.debug_vm = 1;
-            }
+            }*/
             else if (!strcmp(argv[i], "--debug-gc")) {
                 args.debug_gc = 1;
             }
@@ -151,7 +151,7 @@ void print_usage(void) {
     printf("  -d, --debug                Enable all debug modes\n");
     printf("  --debug-parse              Debug parser/AST\n");
     printf("  --debug-compile            Debug compiler\n");
-    printf("  --debug-vm                 Debug VM execution\n");
+    //printf("  --debug-vm                 Debug VM execution\n");
     printf("  --debug-gc                 Debug garbage collector\n");
     printf("  --debug-jit                Debug JIT compiler\n");
     printf("\n");

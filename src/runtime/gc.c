@@ -1,69 +1,60 @@
 #include "gc.h"
+
 #include "utils/memory.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+void vm_register_bytes(VM* vm, size_t bytes) {
+    vm->bytes_allocated += bytes;
+}
+
+void vm_unregister_bytes(VM* vm, size_t bytes) {
+    vm->bytes_allocated += bytes;
+}
+
 void* vm_realloc(VM* vm, void* ptr, size_t old_size, size_t new_size) {
-    if (vm->debug_gc) {
-        fprintf(stderr,
-                "[GC-ALLOC] ptr=%p old=%zu new=%zu bytes_allocated(before)=%zu\n",
-                ptr, old_size, new_size, vm->bytes_allocated);
-    }
-
     if (new_size > old_size) {
-        vm->bytes_allocated += new_size - old_size;
-
-        if (vm->gc_enabled && !vm->gc_collecting && vm->bytes_allocated > vm->next_gc) {
-            if (vm->debug_gc) {
-                fprintf(stderr,
-                        "[GC-ALLOC] threshold exceeded: bytes=%zu next_gc=%zu\n",
-                        vm->bytes_allocated, vm->next_gc);
-            }
-            vm_collect_garbage(vm);
-        }
+        vm_register_bytes(vm, new_size - old_size);
     } else if (new_size < old_size) {
-        vm->bytes_allocated -= old_size - new_size;
+        vm_unregister_bytes(vm, new_size - old_size);
     }
 
     if (new_size == 0) {
-        if (vm->debug_gc) {
-            fprintf(stderr,
-                    "[GC-FREE]  ptr=%p size=%zu bytes_allocated(after)=%zu\n",
-                    ptr, old_size, vm->bytes_allocated);
-        }
         free_ptr(ptr);
         return NULL;
     }
 
     void* new_ptr = reallocate(ptr, new_size);
 
-    if (vm->debug_gc) {
-        fprintf(stderr,
-                "[GC-REALLOC] %p -> %p (%zu bytes), bytes_allocated(after)=%zu\n",
-                ptr, new_ptr, new_size, vm->bytes_allocated);
-    }
-
     return new_ptr;
+}
+
+void gc_check(VM* vm) {
+    if (vm->gc_enabled && !vm->gc_collecting && vm->bytes_allocated > vm->next_gc) {
+        gc_collect_garbage(vm);
+    }
 }
 
 void link_object(VM* vm, Object* obj, uint8_t type) {
     obj->type = type;
-    obj->marked = 0;
+    obj->marked = 1;
     obj->next = vm->objects;
     vm->objects = obj;
+
+    gc_check(vm);
+
+    obj->marked = 0;
 }
 
 void mark_value(VM* vm, Value v) {
-    //if (vm->debug_gc) printf("[DEBUG] mark value type=%d\n", v.type);
-
     if (!IS_OBJECT(v)) return;
 
     Object* obj = AS_OBJECT(v);
     if (obj == NULL || (uintptr_t)obj < 0x10000) {
         if (vm->debug_gc) {
-            fprintf(stderr, "[GC-WARN] Skipping invalid Value{type=%d, obj=%p}\n",
+            printf( "[GC-WARN] Skipping invalid Value{type=%d, obj=%p}\n",
                     v.type, (void*)obj);
         }
         return;
@@ -76,12 +67,11 @@ void mark_value(VM* vm, Value v) {
 void mark_object(VM* vm, Object* obj) {
     if (obj == NULL || (uintptr_t)obj < 0x10000) {
         if (vm->debug_gc) {
-            fprintf(stderr, "[GC-WARN] Invalid object pointer: %p\n", (void*)obj);
+            printf( "[GC-WARN] Invalid object pointer: %p\n", (void*)obj);
         }
         return;
     }
 
-    //if (vm->debug_gc) printf("[DEBUG] mark obj call on %d\n", obj->type);
     if (obj->marked) return;
     obj->marked = 1;
 
@@ -128,15 +118,45 @@ void mark_object(VM* vm, Object* obj) {
     }
 }
 
-void vm_mark_roots(VM* vm) {
+void mark_roots(VM* vm) {
     if (!vm || !vm->stack) return;
 
-    for (int i = 0; i < vm->sp; i++) {
-        mark_value(vm, vm->stack[i]);
+    for (int f = 0; f < vm->frame_count; f++) {
+        CallFrame* frame = &vm->frames[f];
+        int frame_start = frame->slots_offset;
+        int frame_end = frame_start + frame->slot_count;
+
+        if (frame_end > vm->sp) {
+            frame_end = vm->sp;
+        }
+
+        for (int i = frame_start; i < frame_end; i++) {
+            Value val = vm->stack[i];
+            mark_value(vm, val);
+        }
+    }
+
+    if (vm->frame_count > 0) {
+        CallFrame* top_frame = &vm->frames[vm->frame_count - 1];
+        int top_frame_end = top_frame->slots_offset + top_frame->slot_count;
+
+        if (top_frame_end < vm->sp) {
+            for (int i = top_frame_end; i < vm->sp; i++) {
+                Value val = vm->stack[i];
+                mark_value(vm, val);
+            }
+        }
+    } else if (vm->sp > 0) {
+        for (int i = 0; i < vm->sp; i++) {
+            Value val = vm->stack[i];
+            mark_value(vm, val);
+        }
     }
 
     for (int i = 0; i < vm->global_count; i++) {
-        mark_value(vm, vm->globals[i]);
+        Value val = vm->globals[i];
+
+        mark_value(vm, val);
     }
 
     for (int i = 0; i < vm->constants.count; i++) {
@@ -152,6 +172,7 @@ void vm_mark_roots(VM* vm) {
 
     for (Upvalue* uv = vm->open_upvalues; uv != NULL; uv = uv->next) {
         mark_object(vm, (Object*)uv);
+
         if (uv->location && uv->location != &uv->closed) {
             mark_value(vm, *uv->location);
         }
@@ -159,10 +180,10 @@ void vm_mark_roots(VM* vm) {
     }
 }
 
-void vm_collect_garbage(VM* vm) {
+void gc_collect_garbage(VM* vm) {
     if (vm->gc_collecting) {
         if (vm->debug_gc) {
-            fprintf(stderr, "[GC] Already collecting, skipping recursive call\n");
+            printf( "[GC] Already collecting, skipping recursive call\n");
         }
         return;
     }
@@ -172,7 +193,7 @@ void vm_collect_garbage(VM* vm) {
     size_t before = vm->bytes_allocated;
     int freed_objects = 0;
 
-    vm_mark_roots(vm);
+    mark_roots(vm);
 
     Object* prev = NULL;
     Object* obj = vm->objects;
@@ -245,17 +266,19 @@ void vm_collect_garbage(VM* vm) {
 
             freed_objects++;
         } else {
-            obj->marked = 0;
-            prev = obj;
-            obj = obj->next;
+            if (obj){
+                obj->marked = 0;
+                prev = obj;
+                obj = obj->next;
+            }
         }
     }
 
     size_t after = vm->bytes_allocated;
-    vm->next_gc = vm->bytes_allocated * 2;
+    vm->next_gc = vm->bytes_allocated + vm->bytes_allocated / 2;
 
     if (vm->debug_gc) {
-        fprintf(stderr,
+        printf(
                 "[GC] collected %d objects, freed %zu bytes (now %zu bytes, next_gc=%zu)\n",
                 freed_objects,
                 before > after ? before - after : 0,
